@@ -1,3 +1,21 @@
+# Core Data Processing
 pandas
+numpy
+
+# Machine Learning
+scikit-learn
+
+# Natural Language Processing
+spacy
+
+# Web Scraping
 selenium
+beautifulsoup4
 undetected-chromedriver
+
+# Utilities
+lxml
+urllib3
+
+# Note: After installing requirements, run:
+# python -m spacy download en_core_web_sm
