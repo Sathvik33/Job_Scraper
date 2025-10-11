@@ -1,9 +1,22 @@
+# Core Data Processing
 pandas
 numpy
+
 scikit-learn
 spacy
 selenium
 beautifulsoup4
 undetected-chromedriver
+lxml
+urllib3
+
+
+scikit-learn
+
+spacy
+selenium
+beautifulsoup4
+undetected-chromedriver
+
 lxml
 urllib3
