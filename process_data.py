@@ -317,73 +317,6 @@ def extract_experience_from_titles(df):
     
     return df
 
-
-def extract_skills_from_title(df):
-    """Extract technical skills from job titles"""
-    print("  → Extracting skills from job titles...")
-    
-    # Comprehensive skills database
-    SKILLS_DB = {
-        # Programming Languages
-        'python', 'java', 'c++', 'c#', 'golang', 'go', 'php', 'javascript', 'typescript',
-        'ruby', 'scala', 'kotlin', 'swift', 'rust', 'r', 'perl',
-        
-        # Frontend
-        'react', 'vue', 'angular', 'next.js', 'nextjs', 'svelte', 'html', 'css', 'sass',
-        'redux', 'webpack', 'tailwind',
-        
-        # Backend
-        'django', 'flask', 'fastapi', 'node.js', 'nodejs', 'express', 'spring', 'laravel',
-        'asp.net', 'rails', 'nest.js',
-        
-        # Databases
-        'sql', 'nosql', 'mongodb', 'postgresql', 'mysql', 'redis', 'elasticsearch',
-        'cassandra', 'dynamodb', 'oracle',
-        
-        # Cloud & DevOps
-        'aws', 'azure', 'gcp', 'docker', 'kubernetes', 'jenkins', 'terraform',
-        'ansible', 'chef', 'puppet', 'ci/cd', 'gitlab', 'github actions',
-        
-        # Mobile
-        'android', 'ios', 'react native', 'flutter', 'xamarin', 'ionic',
-        
-        # Data & ML
-        'machine learning', 'ml', 'ai', 'data science', 'pandas', 'tensorflow', 'pytorch',
-        'scikit-learn', 'keras', 'spark', 'hadoop', 'airflow', 'nlp', 'computer vision',
-        
-        # Other
-        'api', 'rest', 'graphql', 'microservices', 'kafka', 'rabbitmq', 'grpc',
-        'agile', 'scrum', 'git'
-    }
-    
-    all_skills = []
-    
-    for title in df['Job Title'].fillna('').astype(str).str.lower():
-        found_skills = set()
-        
-        # Direct keyword matching
-        for skill in SKILLS_DB:
-            if skill in title:
-                found_skills.add(skill)
-        
-        # Bigram matching for two-word skills
-        words = title.split()
-        bigrams = [' '.join(words[i:i+2]) for i in range(len(words)-1)]
-        for bigram in bigrams:
-            if bigram in SKILLS_DB:
-                found_skills.add(bigram)
-        
-        all_skills.append(', '.join(sorted(found_skills)) if found_skills else 'Not specified')
-    
-    df['Skills'] = all_skills
-    df['Skills_Count'] = df['Skills'].apply(lambda x: len(x.split(', ')) if x != 'Not specified' else 0)
-    
-    print(f"    Jobs with skills: {len(df[df['Skills_Count'] > 0])}")
-    print(f"    Average skills per job: {df['Skills_Count'].mean():.2f}")
-    
-    return df
-
-
 def run_ml_pipeline():
     """Main ML processing pipeline"""
     print("=" * 80)
@@ -424,7 +357,6 @@ def run_ml_pipeline():
     df = enhanced_job_type_classification(df)
     df = advanced_role_standardization(df)
     df = extract_experience_from_titles(df)
-    df = extract_skills_from_title(df)
     
     print(f"\n[4/5] Final Data Preparation")
     
@@ -461,23 +393,7 @@ def run_ml_pipeline():
         print(f"      Min: {df['Experience_Years'].min()} years")
         print(f"      Max: {df['Experience_Years'].max()} years")
         print(f"      Average: {df['Experience_Years'].mean():.1f} years")
-    
-    print(f"\n    ✓ Skills Analysis:")
-    jobs_with_skills = len(df[df['Skills'] != 'Not specified'])
-    print(f"      Jobs with extracted skills: {jobs_with_skills}")
-    
-    # Top skills
-    all_skills_flat = []
-    for skills_str in df['Skills']:
-        if skills_str != 'Not specified':
-            all_skills_flat.extend(skills_str.split(', '))
-    
-    if all_skills_flat:
-        skill_counter = Counter(all_skills_flat)
-        print(f"      Top 10 skills:")
-        for skill, count in skill_counter.most_common(10):
-            print(f"        • {skill}: {count}")
-    
+
     print(f"\n    ✓ Saving processed data...")
     
     # Save to CSV
