@@ -7,8 +7,6 @@ from urllib.parse import quote, urljoin
 from bs4 import BeautifulSoup
 from datetime import datetime, timedelta
 from collections import Counter
-
-# Selenium imports
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
@@ -18,7 +16,6 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException, NoSuchElementException
 from selenium_stealth import stealth
 
-# --- Configuration ---
 BASE_DIR = r'C:\Sathvik-py\Talrn\job_scraper'
 DATA_DIR = os.path.join(BASE_DIR, 'Data')
 OUTPUT_FILE = os.path.join(DATA_DIR, 'jobs_raw_data.csv')
