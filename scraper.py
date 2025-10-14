@@ -16,8 +16,6 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium_stealth import stealth
 import concurrent.futures
 from threading import Lock
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.feature_extraction.text import TfidfVectorizer
 
 BASE_DIR = os.path.dirname(__file__)
 DATA_DIR = os.path.join(BASE_DIR, 'Data')
@@ -322,12 +320,7 @@ class CheckboxSolver:
             print(f"❌ Bot protection handling failed: {e}")
             return False
 
-class MLJobClassifier:
-    def __init__(self):
-        self.vectorizer = TfidfVectorizer(max_features=800, stop_words='english')
-        self.classifier = RandomForestClassifier(n_estimators=50, random_state=42)
-        self.is_trained = False
-    
+class JobTypeClassifier:
     def predict(self, text):
         text_lower = text.lower()
         
@@ -599,7 +592,7 @@ def extract_job_details_parallel(link_meta_tuple):
     """Parallel job detail extraction"""
     link, meta = link_meta_tuple
     driver = setup_stealth_driver_fast()
-    ml_classifier = MLJobClassifier()
+    ml_classifier = JobTypeClassifier()
     exp_extractor = SmartExperienceExtractor()
     checkbox_solver = CheckboxSolver()
     
