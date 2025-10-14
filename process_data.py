@@ -4,410 +4,371 @@ import os
 import re
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.cluster import DBSCAN, KMeans
-from sklearn.pipeline import make_pipeline
-from sklearn.decomposition import PCA
+from sklearn.cluster import DBSCAN
+import joblib
 from collections import Counter
+from datetime import datetime, timedelta
 
-# Define paths
-BASE_DIR = r'C:\Sathvik-py\Talrn\job_scraper'
+BASE_DIR = os.path.dirname(__file__)
 DATA_DIR = os.path.join(BASE_DIR, 'Data')
+MODELS_DIR = os.path.join(BASE_DIR, 'ML_Models')
 INPUT_FILE = os.path.join(DATA_DIR, 'jobs_raw_data.csv')
 OUTPUT_FILE = os.path.join(DATA_DIR, 'jobs_advanced.csv')
 
 os.makedirs(DATA_DIR, exist_ok=True)
+os.makedirs(MODELS_DIR, exist_ok=True)
 
-# --- ML Components ---
-
-class ExperienceExtractor:
+class DateConverter:
+    """Convert various date formats to standardized format"""
+    
     @staticmethod
-    def extract_experience(text):
-        if not text or pd.isna(text):
-            return 0
+    def convert_to_standard_date(date_str):
+        """Convert date strings to 'X days ago' format or actual date to 'days ago'"""
+        if not date_str or pd.isna(date_str) or date_str == 'Not specified':
+            return 'Recent'
         
-        text_lower = str(text).lower()
+        date_str = str(date_str).strip()
         
-        # Experience patterns
-        patterns = [
-            (r'(\d+)\s*[-–to]+\s*(\d+)\s*(?:years?|yrs?)', 'range'),
-            (r'(\d+)\s*\+\s*(?:years?|yrs?)', 'plus'),
-            (r'(?:minimum|min|at least)\s*(\d+)\s*(?:years?|yrs?)', 'minimum'),
-            (r'\b(\d+)\s*(?:years?|yrs?)\s*(?:of)?\s*(?:experience|exp)?', 'single'),
-        ]
+        # If already in "X days ago" or "X hours ago" format, keep as is
+        if any(keyword in date_str.lower() for keyword in ['ago', 'day', 'hour', 'week', 'month']):
+            return DateConverter._normalize_relative_date(date_str)
         
-        for pattern, pattern_type in patterns:
-            matches = re.findall(pattern, text_lower)
-            if matches:
-                if pattern_type == 'range':
-                    nums = [int(n) for n in matches[0]]
-                    return max(nums)  # Use max of range
-                elif pattern_type == 'plus':
-                    return int(matches[0])
-                elif pattern_type == 'minimum':
-                    return int(matches[0])
-                else:
-                    nums = [int(m) for m in matches if 0 < int(m) <= 20]
-                    if nums:
-                        return max(nums)
+        # If it's an actual date like "2025-10-04", convert to "days ago"
+        elif re.match(r'\d{4}-\d{2}-\d{2}', date_str):
+            return DateConverter._convert_absolute_to_relative(date_str)
         
-        # Check for fresher/entry level
-        fresher_keywords = ['fresher', 'entry level', '0-1 year', 'graduate', 'no experience', 'junior']
-        if any(word in text_lower for word in fresher_keywords):
-            return 0
+        # For any other format, try to parse
+        else:
+            return DateConverter._try_parse_date(date_str)
+    
+    @staticmethod
+    def _normalize_relative_date(date_str):
+        """Normalize relative date strings to 'X days ago' format"""
+        date_lower = date_str.lower()
         
-        # Check for senior level (estimate)
-        senior_keywords = ['senior', 'lead', 'principal', 'staff', 'architect']
-        if any(word in text_lower for word in senior_keywords):
-            return 5  # Estimate 5+ years for senior roles
+        # Handle hours
+        hour_match = re.search(r'(\d+)\s*hour', date_lower)
+        if hour_match:
+            hours = int(hour_match.group(1))
+            if hours >= 24:
+                days = hours // 24
+                return f"{days} days ago"
+            else:
+                return "Today"
         
-        return 0  # Default
+        # Handle days
+        day_match = re.search(r'(\d+)\s*day', date_lower)
+        if day_match:
+            days = int(day_match.group(1))
+            return f"{days} days ago"
+        
+        # Handle weeks
+        week_match = re.search(r'(\d+)\s*week', date_lower)
+        if week_match:
+            weeks = int(week_match.group(1))
+            days = weeks * 7
+            return f"{days} days ago"
+        
+        # Handle months
+        month_match = re.search(r'(\d+)\s*month', date_lower)
+        if month_match:
+            months = int(month_match.group(1))
+            days = months * 30  # Approximate
+            return f"{days} days ago"
+        
+        # Handle "just now", "recently", etc.
+        if any(word in date_lower for word in ['just now', 'recently', 'today', 'new']):
+            return "Today"
+        
+        return "Recent"
+    
+    @staticmethod
+    def _convert_absolute_to_relative(date_str):
+        """Convert absolute date (YYYY-MM-DD) to 'X days ago' format"""
+        try:
+            # Parse the date
+            date_obj = datetime.strptime(date_str, '%Y-%m-%d')
+            today = datetime.now()
+            
+            # Calculate difference
+            delta = today - date_obj
+            days_ago = delta.days
+            
+            if days_ago == 0:
+                return "Today"
+            elif days_ago == 1:
+                return "1 day ago"
+            elif days_ago < 7:
+                return f"{days_ago} days ago"
+            elif days_ago < 30:
+                weeks = days_ago // 7
+                return f"{weeks} weeks ago"
+            else:
+                months = days_ago // 30
+                return f"{months} months ago"
+                
+        except ValueError:
+            return "Recent"
+    
+    @staticmethod
+    def _try_parse_date(date_str):
+        """Try to parse various date formats"""
+        date_lower = date_str.lower()
+        
+        # Common job site date formats
+        if 'today' in date_lower or 'just now' in date_lower:
+            return "Today"
+        elif 'yesterday' in date_lower:
+            return "1 day ago"
+        elif 'week' in date_lower:
+            return "7 days ago"
+        elif 'month' in date_lower:
+            return "30 days ago"
+        
+        # Try to extract numbers with time units
+        match = re.search(r'(\d+)\s*(\w+)', date_lower)
+        if match:
+            number = int(match.group(1))
+            unit = match.group(2).lower()
+            
+            if 'hour' in unit:
+                return "Today" if number < 24 else f"{number//24} days ago"
+            elif 'day' in unit:
+                return f"{number} days ago"
+            elif 'week' in unit:
+                return f"{number * 7} days ago"
+            elif 'month' in unit:
+                return f"{number * 30} days ago"
+        
+        return "Recent"
 
-
-class DynamicRoleExpander:
-    """ML-powered dynamic role title expansion and classification"""
+class MLRoleClassifier:
+    """ML-powered role classification with dynamic keyword expansion"""
     
     def __init__(self):
-        self.role_embeddings = {}
-        self.discovered_roles = {}
-        
-    def expand_roles_with_ml(self, job_titles):
-        """Use ML clustering to discover new role patterns"""
-        print("  → Discovering role patterns with ML clustering...")
-        
-        if len(job_titles) < 2:
-            return {}
-        
-        # Filter out None/NaN values
-        job_titles = [str(title) for title in job_titles if pd.notna(title)]
-        
-        if len(job_titles) < 2:
-            return {}
-            
-        vectorizer = TfidfVectorizer(max_features=100, stop_words='english')
-        try:
-            title_vectors = vectorizer.fit_transform(job_titles)
-                
-            if len(job_titles) > 10:
-                n_components = min(10, len(job_titles)-1)
-                pca = PCA(n_components=n_components)
-                reduced_embeddings = pca.fit_transform(title_vectors.toarray())
-            else:
-                reduced_embeddings = title_vectors.toarray()
-        except Exception as e:
-            print(f"    Clustering failed: {e}. Using simple grouping.")
-            return self._simple_role_grouping(job_titles)
-        
-        # Apply clustering
-        if len(job_titles) > 5:
-            try:
-                clustering = DBSCAN(eps=0.7, min_samples=2)
-                cluster_labels = clustering.fit_predict(reduced_embeddings)
-            except:
-                n_clusters = min(5, len(job_titles))
-                clustering = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
-                cluster_labels = clustering.fit_predict(reduced_embeddings)
-        else:
-            cluster_labels = np.zeros(len(job_titles), dtype=int)
-        
-        # Analyze discovered clusters
-        discovered_roles = {}
-        for cluster_id in set(cluster_labels):
-            if cluster_id != -1:
-                cluster_titles = [job_titles[i] for i in range(len(job_titles)) if cluster_labels[i] == cluster_id]
-                if cluster_titles and len(cluster_titles) > 1:
-                    role_name = self._analyze_cluster_patterns(cluster_titles)
-                    discovered_roles[cluster_id] = {
-                        'role_name': role_name,
-                        'titles': cluster_titles[:5],
-                        'size': len(cluster_titles)
-                    }
-        
-        self.discovered_roles = discovered_roles
-        return discovered_roles
-    
-    def _simple_role_grouping(self, job_titles):
-        """Fallback: Simple keyword-based role grouping"""
-        role_groups = {}
-        
-        for title in job_titles:
-            if not title:
-                continue
-                
-            title_lower = str(title).lower()
-            
-            if 'data' in title_lower and 'scientist' in title_lower:
-                group = 'data_scientist'
-            elif 'machine learning' in title_lower or 'ml engineer' in title_lower or 'ai' in title_lower:
-                group = 'ml_ai'
-            elif 'frontend' in title_lower or 'front-end' in title_lower or 'react' in title_lower:
-                group = 'frontend'
-            elif 'backend' in title_lower or 'back-end' in title_lower:
-                group = 'backend'
-            elif 'devops' in title_lower or 'sre' in title_lower:
-                group = 'devops'
-            elif 'full stack' in title_lower or 'fullstack' in title_lower:
-                group = 'fullstack'
-            elif 'mobile' in title_lower or 'android' in title_lower or 'ios' in title_lower:
-                group = 'mobile'
-            elif 'data engineer' in title_lower:
-                group = 'data_engineer'
-            else:
-                group = 'other'
-                
-            if group not in role_groups:
-                role_groups[group] = []
-            role_groups[group].append(title)
-        
-        discovered_roles = {}
-        for i, (group, titles) in enumerate(role_groups.items()):
-            if len(titles) > 1:
-                discovered_roles[i] = {
-                    'role_name': f"Discovered {group.replace('_', ' ').title()}",
-                    'titles': titles[:5],
-                    'size': len(titles)
-                }
-        
-        return discovered_roles
-    
-    def _analyze_cluster_patterns(self, titles):
-        """Analyze title patterns to name discovered roles"""
-        common_patterns = {
-            'Backend': ['backend', 'back-end', 'server', 'api', 'database'],
-            'Frontend': ['frontend', 'front-end', 'ui', 'ux', 'react', 'angular', 'vue'],
-            'Full Stack': ['full stack', 'full-stack', 'fullstack'],
-            'DevOps': ['devops', 'sre', 'cloud', 'infrastructure', 'deployment'],
-            'Data': ['data', 'analytics', 'analysis', 'bi', 'database'],
-            'ML/AI': ['machine learning', 'ml', 'ai', 'artificial intelligence', 'deep learning'],
-            'Mobile': ['mobile', 'android', 'ios', 'react native', 'flutter'],
-            'QA': ['qa', 'test', 'quality', 'automation']
+        self.role_model = None
+        self.vectorizer = TfidfVectorizer(max_features=1000, ngram_range=(1, 3))
+        self.role_mappings = {
+            'Backend Developer': ['backend', 'server', 'api', 'database', 'microservices'],
+            'Frontend Developer': ['frontend', 'ui', 'ux', 'javascript', 'react'],
+            'Full Stack Developer': ['full stack', 'fullstack', 'end-to-end'],
+            'Data Scientist': ['data science', 'analytics', 'machine learning', 'statistics'],
+            'ML/AI Engineer': ['machine learning', 'ai', 'deep learning', 'neural networks'],
+            'DevOps Engineer': ['devops', 'cloud', 'infrastructure', 'cicd'],
+            'Mobile Developer': ['mobile', 'android', 'ios', 'react native'],
+            'Data Engineer': ['data engineer', 'etl', 'data pipeline', 'big data'],
+            'QA Engineer': ['qa', 'testing', 'quality assurance', 'automation'],
+            'Software Engineer': ['software engineer', 'developer', 'programmer']
         }
         
-        title_text = ' '.join([str(t) for t in titles]).lower()
-        scores = {}
+    def train_role_classifier(self, job_titles, job_descriptions=None):
+        """Train ML model for role classification"""
+        print("Training ML role classification model...")
         
-        for pattern, keywords in common_patterns.items():
-            score = sum(1 for keyword in keywords if keyword in title_text)
-            scores[pattern] = score
+        # Combine titles and descriptions for better context
+        if job_descriptions is not None:
+            training_data = [f"{title} {desc}" for title, desc in zip(job_titles, job_descriptions)]
+        else:
+            training_data = job_titles
         
-        if scores:
-            best_pattern = max(scores, key=scores.get)
-            if scores[best_pattern] > 0:
-                return f"{best_pattern} Developer"
+        # Generate training labels using rule-based approach first
+        training_labels = [self._rule_based_classify(title) for title in job_titles]
         
-        return "Software Engineer"
+        # Vectorize text data
+        X = self.vectorizer.fit_transform(training_data)
+        
+        # Train Random Forest classifier
+        self.role_model = RandomForestClassifier(
+            n_estimators=100, 
+            random_state=42,
+            max_depth=20
+        )
+        self.role_model.fit(X, training_labels)
+        
+        # Save model
+        joblib.dump(self.role_model, os.path.join(MODELS_DIR, 'role_classifier.pkl'))
+        joblib.dump(self.vectorizer, os.path.join(MODELS_DIR, 'role_vectorizer.pkl'))
+        
+        print("ML role classifier trained and saved")
+        
+    def predict_role(self, job_title, job_description=""):
+        """Predict role using ML model"""
+        if self.role_model is None:
+            return self._rule_based_classify(job_title)
+        
+        text_data = f"{job_title} {job_description}"
+        X = self.vectorizer.transform([text_data])
+        prediction = self.role_model.predict(X)[0]
+        return prediction
     
-    def classify_role(self, title):
-        """Classify role using keywords and ML"""
+    def _rule_based_classify(self, title):
+        """Fallback rule-based classification"""
         if not title or pd.isna(title):
             return 'Other'
             
         title_lower = str(title).lower()
-        
-        role_keywords = {
-            'Backend Developer': ['backend', 'back-end', 'django', 'flask', 'api', 'node.js', 'nodejs', 'php', 'golang', 'java backend', 'spring boot', 'server side'],
-            'Frontend Developer': ['frontend', 'front-end', 'ui', 'react', 'angular', 'vue', 'javascript', 'typescript', 'css', 'html', 'web developer'],
-            'Full Stack Developer': ['full stack', 'full-stack', 'fullstack', 'mern', 'mean'],
-            'Data Scientist': ['data scientist', 'analytics', 'analyst', 'data analysis', 'bi', 'business intelligence'],
-            'ML/AI Engineer': ['ml', 'ai', 'machine learning', 'genai', 'nlp', 'artificial intelligence', 'deep learning', 'computer vision'],
-            'DevOps Engineer': ['devops', 'sre', 'cloud', 'aws', 'azure', 'kubernetes', 'docker', 'ci/cd', 'infrastructure'],
-            'Mobile Developer': ['mobile', 'android', 'ios', 'react native', 'flutter', 'swift', 'kotlin'],
-            'Data Engineer': ['data engineer', 'etl', 'data pipeline', 'data warehouse', 'bigdata'],
-            'QA Engineer': ['qa', 'quality', 'testing', 'test engineer', 'automation testing', 'sdet'],
-            'Software Engineer': ['software engineer', 'swe', 'software developer', 'programmer', 'developer', 'engineer']
-        }
-        
-        for role, keywords in role_keywords.items():
+        for role, keywords in self.role_mappings.items():
             if any(keyword in title_lower for keyword in keywords):
                 return role
-        
-        # Check discovered roles
-        for cluster_info in self.discovered_roles.values():
-            role_name = cluster_info['role_name'].lower()
-            if any(keyword in title_lower for keyword in role_name.split()):
-                return cluster_info['role_name']
-        
         return 'Other'
-
-
-def enhanced_job_type_classification(df):
-    """ML classification for job types"""
-    print("  → Running ML job type classification...")
     
-    # Use existing Job Type if available, otherwise classify from title
-    if 'Job Type' not in df.columns or df['Job Type'].isna().sum() > len(df) * 0.5:
+    def expand_keywords_ml(self, new_job_titles):
+        """Dynamically expand role keywords using ML clustering"""
+        print("Expanding role keywords using ML clustering...")
         
-        # Training data for job type classification
-        train_data = [
-            ("remote work from home", "Remote"),
-            ("work from anywhere distributed", "Remote"),
-            ("remote position telecommute", "Remote"),
-            ("contract basis temporary", "Contract"),
-            ("freelance project consulting", "Contract"),
-            ("contract to hire c2c", "Contract"),
-            ("intern internship trainee", "Internship"),
-            ("trainee graduate program", "Internship"),
-            ("full time permanent staff", "Full-time"),
-            ("permanent position fte", "Full-time"),
-        ]
+        if len(new_job_titles) < 10:
+            return self.role_mappings
         
-        train_texts = [data[0] for data in train_data]
-        train_labels = [data[1] for data in train_data]
+        # Vectorize new job titles
+        title_vectorizer = TfidfVectorizer(max_features=500, stop_words='english')
+        title_vectors = title_vectorizer.fit_transform(new_job_titles)
         
-        # Build ML model
-        model = make_pipeline(
-            TfidfVectorizer(ngram_range=(1, 3), max_features=500),
-            RandomForestClassifier(n_estimators=100, random_state=42)
-        )
+        # Apply clustering to discover new patterns
+        clustering = DBSCAN(eps=0.5, min_samples=2)
+        clusters = clustering.fit_predict(title_vectors.toarray())
         
-        model.fit(train_texts, train_labels)
+        # Analyze each cluster for new keywords
+        for cluster_id in set(clusters):
+            if cluster_id != -1:  # Ignore noise
+                cluster_titles = [new_job_titles[i] for i in range(len(new_job_titles)) 
+                                if clusters[i] == cluster_id]
+                
+                if len(cluster_titles) > 3:  # Significant cluster
+                    new_keywords = self._extract_cluster_keywords(cluster_titles)
+                    closest_role = self._find_closest_role(new_keywords)
+                    
+                    if closest_role:
+                        # Expand existing role with new keywords
+                        self.role_mappings[closest_role].extend(new_keywords)
+                        self.role_mappings[closest_role] = list(set(self.role_mappings[closest_role]))
+                        print(f"Expanded {closest_role} with: {new_keywords}")
         
-        # Predict on actual data
-        job_titles = df['Job Title'].fillna('').astype(str)
-        predictions = model.predict(job_titles)
-        probabilities = model.predict_proba(job_titles)
-        
-        # Add predictions
-        df['Job Type'] = predictions
-        df['Type_Confidence'] = np.max(probabilities, axis=1)
-        
-        print(f"    High confidence (>0.8): {len(df[df['Type_Confidence'] > 0.8])}")
-        print(f"    Medium confidence (0.5-0.8): {len(df[(df['Type_Confidence'] >= 0.5) & (df['Type_Confidence'] <= 0.8)])}")
-        print(f"    Low confidence (<0.5): {len(df[df['Type_Confidence'] < 0.5])}")
-    else:
-        print(f"    Using existing Job Type classification")
-        df['Type_Confidence'] = 1.0
+        return self.role_mappings
     
-    return df
+    def _extract_cluster_keywords(self, titles):
+        """Extract significant keywords from title cluster"""
+        all_text = ' '.join(titles).lower()
+        words = re.findall(r'\b[a-z]{4,15}\b', all_text)
+        
+        # Remove common stop words
+        stop_words = {'software', 'engineer', 'developer', 'senior', 'junior', 'lead'}
+        filtered_words = [word for word in words if word not in stop_words]
+        
+        word_freq = Counter(filtered_words)
+        return [word for word, count in word_freq.most_common(5) if count > 1]
+    
+    def _find_closest_role(self, keywords):
+        """Find closest existing role for new keywords"""
+        best_role = None
+        best_score = 0
+        
+        for role, role_keywords in self.role_mappings.items():
+            score = sum(1 for keyword in keywords if any(role_kw in keyword for role_kw in role_keywords))
+            if score > best_score:
+                best_score = score
+                best_role = role
+        
+        return best_role if best_score > 0 else None
 
+def load_or_train_models(df):
+    """Load existing models or train new ones"""
+    role_classifier = MLRoleClassifier()
+    
+    # Try to load existing models
+    try:
+        role_classifier.role_model = joblib.load(os.path.join(MODELS_DIR, 'role_classifier.pkl'))
+        role_classifier.vectorizer = joblib.load(os.path.join(MODELS_DIR, 'role_vectorizer.pkl'))
+        print("Loaded pre-trained role classification model")
+    except:
+        print("Training new role classification model...")
+        job_titles = df['Job Title'].fillna('').astype(str).tolist()
+        job_descriptions = df.get('Job Description', pd.Series([''] * len(df))).fillna('').astype(str).tolist()
+        role_classifier.train_role_classifier(job_titles, job_descriptions)
+    
+    return role_classifier
 
-def advanced_role_standardization(df):
-    """Enhanced role standardization with ML clustering"""
-    print("  → Running advanced role standardization...")
-    
-    role_expander = DynamicRoleExpander()
-    
-    # Get all job titles
-    job_titles = df['Job Title'].fillna('').astype(str).tolist()
-    
-    # Discover role patterns
-    discovered_roles = role_expander.expand_roles_with_ml(job_titles)
-    
-    # Classify each job
-    df['Role'] = df['Job Title'].fillna('').astype(str).apply(role_expander.classify_role)
-    
-    if discovered_roles:
-        print(f"    Discovered {len(discovered_roles)} role patterns:")
-        for role_id, role_info in list(discovered_roles.items())[:5]:  # Show first 5
-            print(f"      • {role_info['role_name']}: {role_info['size']} jobs")
-    
-    return df
-
-
-def extract_experience_from_titles(df):
-    """Extract experience requirements from job titles"""
-    print("  → Extracting experience requirements...")
-    
-    exp_extractor = ExperienceExtractor()
-    
-    df['Experience_Years'] = df['Job Title'].apply(exp_extractor.extract_experience)
-    
-    print(f"    Jobs with experience info: {len(df[df['Experience_Years'] > 0])}")
-    print(f"    Average experience: {df['Experience_Years'].mean():.1f} years")
-    print(f"    Max experience: {df['Experience_Years'].max()} years")
-    
-    return df
-
-def run_ml_pipeline():
-    """Main ML processing pipeline"""
+def run_ml_enhanced_pipeline():
+    """ML-enhanced data processing pipeline"""
     print("=" * 80)
-    print("ADVANCED ML PROCESSING PIPELINE")
+    print("ML ENHANCED JOB DATA PROCESSING PIPELINE")
     print("=" * 80)
     
-    print(f"\n[1/5] Loading data from: {INPUT_FILE}")
-    
+    # Load data
+    print("\n[1/4] Loading job data...")
     try:
         df = pd.read_csv(INPUT_FILE)
-        print(f"    ✓ Loaded {len(df)} job listings")
-        print(f"    Columns: {list(df.columns)}")
-    except FileNotFoundError:
-        print(f"    ✗ Error: File not found at {INPUT_FILE}")
-        print("    Please run scraper.py first to generate raw data")
-        return
+        print(f"Loaded {len(df)} job listings")
     except Exception as e:
-        print(f"    ✗ Error loading data: {e}")
+        print(f"Error loading data: {e}")
         return
-
-    print(f"\n[2/5] Data Cleaning & Deduplication")
-    print(f"    Original listings: {len(df)}")
-    
-    # Remove rows with missing critical fields
-    df.dropna(subset=['Job Title', 'Job Link'], inplace=True)
-    print(f"    After removing incomplete records: {len(df)}")
     
     # Remove duplicates
+    print("\n[2/4] Data cleaning and deduplication...")
     initial_count = len(df)
-    df.drop_duplicates(subset=['Job Link'], keep='first', inplace=True)
-    duplicates_removed = initial_count - len(df)
-    print(f"    Duplicates removed: {duplicates_removed}")
-    print(f"    ✓ Clean dataset: {len(df)} jobs")
-
-    print(f"\n[3/5] ML Processing & Feature Engineering")
+    df = df.drop_duplicates(subset=['Job Link'], keep='first')
+    print(f"Removed {initial_count - len(df)} duplicates")
     
-    # Apply ML transformations
-    df = enhanced_job_type_classification(df)
-    df = advanced_role_standardization(df)
-    df = extract_experience_from_titles(df)
+    # Convert dates to standardized format
+    print("\n[2.5/4] Converting dates to standardized format...")
+    if 'Posted Date' in df.columns:
+        date_converter = DateConverter()
+        df['Posted Date'] = df['Posted Date'].apply(date_converter.convert_to_standard_date)
+        print("Dates converted to standardized format")
     
-    print(f"\n[4/5] Final Data Preparation")
+    # Load or train ML models
+    print("\n[3/4] ML Model Processing...")
+    role_classifier = load_or_train_models(df)
     
-    # Reorder columns for better readability
-    column_order = [
-        'Job Title', 'Company', 'Location', 'Job Type', 'Role',
-        'Experience_Years', 'Skills', 'Posted Date', 'Job Link'
+    # Apply ML classifications
+    print("Applying ML classifications...")
+    
+    # Role classification with dynamic keyword expansion
+    df['Role_ML'] = df.apply(
+        lambda row: role_classifier.predict_role(
+            row.get('Job Title', ''),
+            row.get('Job Description', '')
+        ), axis=1
+    )
+    
+    # Expand keywords with new data
+    new_titles = df['Job Title'].fillna('').astype(str).tolist()
+    role_classifier.expand_keywords_ml(new_titles)
+    
+    # Final processing
+    print("\n[4/4] Final data preparation...")
+    
+    # Reorder columns
+    preferred_order = [
+        'Job Title', 'Company', 'Location', 'Job Type', 'Role_ML',
+        'Posted Date', 'Job Link'
     ]
     
-    # Only include columns that exist
-    final_columns = [col for col in column_order if col in df.columns]
-    
-    # Add any remaining columns
-    remaining_cols = [col for col in df.columns if col not in final_columns and col not in ['Type_Confidence', 'Skills_Count']]
+    final_columns = [col for col in preferred_order if col in df.columns]
+    remaining_cols = [col for col in df.columns if col not in final_columns]
     final_columns.extend(remaining_cols)
     
-    df = df[final_columns]
+    df_final = df[final_columns]
     
-    print(f"\n[5/5] Summary Statistics")
-    print(f"    Final dataset: {len(df)} jobs")
+    # Save results
+    df_final.to_csv(OUTPUT_FILE, index=False, encoding='utf-8')
     
-    print(f"\n    ✓ Role Distribution:")
-    role_counts = df['Role'].value_counts()
-    for role, count in role_counts.head(10).items():
-        print(f"      {role}: {count}")
-    
-    print(f"\n    ✓ Job Type Distribution:")
-    type_counts = df['Job Type'].value_counts()
-    for job_type, count in type_counts.items():
-        print(f"      {job_type}: {count}")
-    
-    if 'Experience_Years' in df.columns:
-        print(f"\n    ✓ Experience Range:")
-        print(f"      Min: {df['Experience_Years'].min()} years")
-        print(f"      Max: {df['Experience_Years'].max()} years")
-        print(f"      Average: {df['Experience_Years'].mean():.1f} years")
-
-    print(f"\n    ✓ Saving processed data...")
-    
-    # Save to CSV
-    df.to_csv(OUTPUT_FILE, index=False, encoding='utf-8')
-    
+    # Summary
     print("\n" + "=" * 80)
-    print("PROCESSING COMPLETE")
+    print("ML PROCESSING COMPLETE")
     print("=" * 80)
-    print(f"✓ Output saved: {OUTPUT_FILE}")
-    print(f"✓ Total columns: {len(df.columns)}")
-    print(f"✓ Columns: {', '.join(df.columns)}")
-    print("\nDataset is ready for analysis!")
+    print(f"Processed jobs: {len(df_final)}")
+    print(f"ML Classifications applied:")
+    print(f"  Roles: {df_final['Role_ML'].nunique()} categories")
+    
+    # Show date distribution
+    if 'Posted Date' in df_final.columns:
+        print(f"Date distribution:")
+        date_counts = df_final['Posted Date'].value_counts().head(5)
+        for date, count in date_counts.items():
+            print(f"  {date}: {count} jobs")
+    
+    print(f"Output: {OUTPUT_FILE}")
     print("=" * 80)
-
 
 if __name__ == "__main__":
-    run_ml_pipeline()
+    run_ml_enhanced_pipeline()
