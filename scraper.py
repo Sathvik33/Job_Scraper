@@ -1,12 +1,10 @@
 import os
 import time
 import random
-import re
 import pandas as pd
 import numpy as np
-from urllib.parse import quote, urljoin
+from urllib.parse import urljoin, quote_plus
 from bs4 import BeautifulSoup
-from datetime import datetime, timedelta
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
@@ -16,736 +14,525 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium_stealth import stealth
 import concurrent.futures
 from threading import Lock
+import joblib
+import re
+import gc
+import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
+# --- Configuration ---
 BASE_DIR = os.path.dirname(__file__)
 DATA_DIR = os.path.join(BASE_DIR, 'Data')
 MODELS_DIR = os.path.join(BASE_DIR, 'ML_Models')
-OUTPUT_FILE = os.path.join(DATA_DIR, 'jobs_raw_data.csv')
+OUTPUT_FILE = os.path.join(DATA_DIR, 'jobs_raw_ml_extracted.csv')
 
 os.makedirs(DATA_DIR, exist_ok=True)
-os.makedirs(MODELS_DIR, exist_ok=True)
 
-PAGES_TO_SCRAPE = 3
-MAX_JOBS_TARGET = 2500
-MIN_JOBS_TARGET = 1500
-MAX_WORKERS = 4
-
-SEARCH_QUERIES = {
-    'core_engineering': [
-        'Software Engineer', 'Backend Developer', 'Frontend Developer', 
-        'Full Stack Developer', 'Software Developer', 'Web Developer'
-    ],
-    'specialized': [
-        'Python Developer', 'Java Developer', 'JavaScript Developer',
-        'DevOps Engineer', 'Machine Learning Engineer', 'Data Engineer',
-        'Cloud Engineer', 'AI Engineer'
-    ],
-    'modern_stack': [
-        'React Developer', 'Node.js Developer', 'AWS Engineer',
-        'Azure Engineer', 'ML Engineer'
-    ],
-    'internships': [
-        'Software Engineer Intern', 'Developer Intern', 'Data Science Intern',
-        'Machine Learning Intern', 'Web Development Intern','AI/ML Internship'
-    ]
-}
-
+# --- Site & Search Configuration ---
 SITE_CONFIG = {
     'indeed': {
         'base_url': 'https://in.indeed.com',
-        'url_template': 'https://in.indeed.com/jobs?q={query}&l=India',
-        'pagination_param': '&start={page}',
-        'selectors': {
-            'card': ['div.job_seen_beacon'],
-            'link': ['h2.jobTitle a'],
-            'detail_title': ['h1.jobsearch-JobInfoHeader-title'],
-            'detail_company': ['div[data-testid="inlineHeader-companyName"]'],
-            'detail_location': ['div[data-testid="inlineHeader-companyLocation"]'],
-            'detail_description': ['div#jobDescriptionText'],
-            'detail_date': ['div[data-testid="jobsearch-JobMetadataFooter"]'],
-        }
+        'search_url': 'https://in.indeed.com/jobs?q={query}&l=India&start={page_num}',
+        'link_selector': 'h2.jobTitle a',
+        'wait_selector': '#jobDescriptionText'
     },
     'naukri': {
         'base_url': 'https://www.naukri.com',
-        'url_template': 'https://www.naukri.com/{query}-jobs',
-        'pagination_param': '-{page}',
-        'selectors': {
-            'card': ['article.jobTuple'],
-            'link': ['a.title'],
-            'detail_title': ['h1.jd-header-title'],
-            'detail_company': ['a.comp-name'],
-            'detail_location': ['span.loc'],
-            'detail_description': ['div.job-desc'],
-            'detail_date': ['span.posted'],
-        }
+        'search_url': 'https://www.naukri.com/{query}-jobs-{page_num}',
+        'link_selector': 'a.title',
+        'wait_selector': 'div.job-desc'
     },
     'linkedin': {
-        'base_url': 'https://www.linkedin.com',
-        'url_template': 'https://www.linkedin.com/jobs/search/?keywords={query}&location=India',
-        'pagination_param': '&start={page}',
-        'selectors': {
-            'card': ['div.job-search-card', 'li.jobs-search-results__list-item'],
-            'link': ['a.base-card__full-link'],
-            'detail_title': ['h1.top-card-layout__title'],
-            'detail_company': ['a.topcard__org-name-link'],
-            'detail_location': ['span.topcard__flavor--bullet'],
-            'detail_description': ['div.show-more-less-html__markup'],
-            'detail_date': ['span.posted-time-ago__text'],
-        }
-    },
-    'monster': {
-        'base_url': 'https://www.monsterindia.com',
-        'url_template': 'https://www.monsterindia.com/search/{query}-jobs',
-        'pagination_param': '?page={page}',
-        'selectors': {
-            'card': ['div.card-apply-content', 'div.job-tile'],
-            'link': ['h3.medium a', 'a.job-title'],
-            'detail_title': ['h1.job-title'],
-            'detail_company': ['div.company h2'],
-            'detail_location': ['div.location span'],
-            'detail_description': ['div.job-desc'],
-            'detail_date': ['div.posted-date'],
-        }
-    },
-    'shine': {
-        'base_url': 'https://www.shine.com',
-        'url_template': 'https://www.shine.com/job-search/{query}-jobs',
-        'pagination_param': '?page={page}',
-        'selectors': {
-            'card': ['div.search_listing', 'div.jobCard'],
-            'link': ['h3.jobTitle a', 'a.job_link'],
-            'detail_title': ['h1.job_title'],
-            'detail_company': ['div.company_name'],
-            'detail_location': ['div.job_location'],
-            'detail_description': ['div.job_description'],
-            'detail_date': ['div.posted_date'],
-        }
+        'base_url': 'https://in.linkedin.com',
+        'search_url': 'https://www.linkedin.com/jobs/search/?keywords={query}&location=India&start={page_num}',
+        'link_selector': 'a.base-card__full-link',
+        'wait_selector': 'div.jobs-details__main-content'
     }
 }
 
-class CheckboxSolver:
-    def __init__(self):
-        print("🤖 Initializing Checkbox Solver with DOM-based detection...")
-        self.fallback_methods = [
-            self._click_by_aria_label,
-            self._click_by_text_content,
-            self._click_by_class_name,
-            self._click_by_id,
-            self._click_recaptcha,
-            self._refresh_page
+SEARCH_QUERIES = [
+    'Software Engineer', 'Backend Developer', 'Frontend Developer', 'Full Stack Developer',
+    'Java Developer', 'Python Developer', 'React Developer', 'SDE', 'Web Developer'
+]
+
+PAGES_TO_SCRAPE = 2
+MAX_WORKERS = 2
+MAX_JOBS_TARGET = 30  # Further reduced for stability
+
+class AdvancedMLExtractor:
+    def __init__(self, models_dir):
+        self.pipelines = {}
+        self.fields = ['Job Title', 'Company', 'Location', 'Job Type', 'Experience', 'Posted Date']
+        self.junk_keywords = [
+            'sign in', 'get the app', 'work from home jobs', 'it jobs', 'companies', 
+            'skip to main content', 'apply', 'save', 'share', 'report', 'jobs', 
+            'similar jobs', 'message', 'company culture', 'highly rated', 'open the app',
+            'show', 'hide', 'view', 'more', 'popular categories', 'cookie', 'privacy',
+            'terms', 'conditions', 'login', 'sign up', 'subscribe', 'follow us',
+            'first name', 'last name', 'email', 'password'  # Added common form fields
         ]
-        print("✅ Checkbox solver initialized with DOM detection methods")
-    
-    def detect_and_click_checkbox(self, driver):
-        """Detect and click checkboxes using DOM analysis"""
-        return self._use_fallback_methods(driver)
-    
-    def _use_fallback_methods(self, driver):
-        """Use DOM-based detection methods"""
-        for method in self.fallback_methods:
+        
+        print("🤖 Initializing Advanced ML Extraction Engine...")
+        for field in self.fields:
+            model_path = os.path.join(models_dir, f"{field.replace(' ', '_').lower()}_pipeline.pkl")
             try:
-                if method(driver):
-                    print(f"✅ Checkbox handled via {method.__name__}")
-                    return True
-            except Exception as e:
-                print(f"❌ {method.__name__} failed: {e}")
-                continue
-        return False
-    
-    def _click_by_aria_label(self, driver):
-        """Click by aria-label attribute"""
-        try:
-            checkbox_selectors = [
-                "[aria-label*='checkbox']",
-                "[aria-label*='robot']",
-                "[aria-label*='human']",
-                "[aria-label*='verify']",
-                "[aria-label*='captcha']",
-                "[role='checkbox']",
-                "[aria-checked]"
-            ]
-            
-            for selector in checkbox_selectors:
-                elements = driver.find_elements(By.CSS_SELECTOR, selector)
-                for element in elements:
-                    if element.is_displayed() and element.is_enabled():
-                        driver.execute_script("arguments[0].click();", element)
-                        time.sleep(1)
-                        return True
-            return False
-        except:
-            return False
-    
-    def _click_by_text_content(self, driver):
-        """Click by text content"""
-        try:
-            text_patterns = [
-                "I'm not a robot",
-                "I am not a robot", 
-                "Verify you are human",
-                "robot",
-                "Human verification",
-                "verification",
-                "captcha",
-                "I'm a human"
-            ]
-            
-            for pattern in text_patterns:
-                # Try different XPath approaches
-                xpaths = [
-                    f"//*[contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), '{pattern.lower()}')]",
-                    f"//*[contains(translate(@value, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), '{pattern.lower()}')]",
-                    f"//*[contains(translate(@placeholder, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), '{pattern.lower()}')]"
-                ]
+                self.pipelines[field] = joblib.load(model_path)
+                print(f"  -> Loaded model for '{field}'")
+            except FileNotFoundError:
+                print(f"  [!] Model for '{field}' not found at {model_path}")
+        
+        if not self.pipelines:
+            raise RuntimeError("No ML models found. Please run train_model.py first.")
+
+    def _create_advanced_features(self, text):
+        """Create the same features used during training"""
+        if not isinstance(text, str) or not text.strip():
+            return {
+                'text_length': 0,
+                'word_count': 0,
+                'has_digits': 0,
+                'digit_count': 0,
+                'has_special_chars': 0,
+                'special_char_count': 0,
+                'is_uppercase_ratio': 0,
+                'has_common_separators': 0,
+                'date_like_pattern': 0,
+                'experience_like_pattern': 0,
+                'url_like_pattern': 0
+            }
+        
+        text = str(text).strip()
+        text_length = len(text)
+        word_count = len(text.split())
+        
+        has_digits = 1 if any(char.isdigit() for char in text) else 0
+        digit_count = sum(char.isdigit() for char in text)
+        
+        special_chars = r'[!@#$%^&*()_+\-=\[\]{};\'":|,.<>?/~]'
+        has_special_chars = 1 if re.search(special_chars, text) else 0
+        special_char_count = len(re.findall(special_chars, text))
+        
+        uppercase_count = sum(1 for char in text if char.isupper())
+        is_uppercase_ratio = uppercase_count / len(text) if text_length > 0 else 0
+        
+        has_common_separators = 1 if any(sep in text for sep in ['•', '|', '-', '·', '–', '—']) else 0
+        
+        date_patterns = [
+            r'\d{1,2}[-/]\d{1,2}[-/]\d{2,4}',
+            r'\d{1,2}\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s+\d{4}',
+            r'(?:today|yesterday|\d+\s+(?:days?|hours?)\s+ago)'
+        ]
+        date_like_pattern = 1 if any(re.search(pattern, text.lower()) for pattern in date_patterns) else 0
+        
+        experience_patterns = [
+            r'\d+\+?\s*(?:years?|yrs?)',
+            r'\d+\s*-\s*\d+\s*(?:years?|yrs?)',
+            r'fresher|entry level|experienced'
+        ]
+        experience_like_pattern = 1 if any(re.search(pattern, text.lower()) for pattern in experience_patterns) else 0
+        
+        url_like_pattern = 1 if re.search(r'https?://|www\.|\.com|\.in', text.lower()) else 0
+        
+        return {
+            'text_length': text_length,
+            'word_count': word_count,
+            'has_digits': has_digits,
+            'digit_count': digit_count,
+            'has_special_chars': has_special_chars,
+            'special_char_count': special_char_count,
+            'is_uppercase_ratio': is_uppercase_ratio,
+            'has_common_separators': has_common_separators,
+            'date_like_pattern': date_like_pattern,
+            'experience_like_pattern': experience_like_pattern,
+            'url_like_pattern': url_like_pattern
+        }
+
+    def _get_quality_candidates(self, soup):
+        """Extract potential text candidates from HTML"""
+        candidates = []
+        
+        priority_selectors = ['h1', 'h2', 'h3', 'h4', 'div', 'span', 'p', 'li', 'strong', 'b']
+        
+        for selector in priority_selectors:
+            for element in soup.select(selector):
+                text = element.get_text(strip=True)
+                if text and 2 < len(text) < 200:
+                    # Enhanced junk filtering
+                    text_lower = text.lower()
+                    if any(junk in text_lower for junk in self.junk_keywords):
+                        continue
+                    
+                    # Skip form fields and personal info
+                    if any(field in text_lower for field in ['first name', 'last name', 'email', 'phone', 'mobile']):
+                        continue
+                    
+                    if len(re.findall(r'[a-zA-Z]', text)) < 2:
+                        continue
+                        
+                    candidates.append({
+                        'text': text,
+                        'tag': element.name
+                    })
+        
+        unique_candidates = []
+        seen_texts = set()
+        for cand in candidates:
+            if cand['text'] not in seen_texts:
+                unique_candidates.append(cand)
+                seen_texts.add(cand['text'])
                 
-                for xpath in xpaths:
-                    elements = driver.find_elements(By.XPATH, xpath)
-                    for element in elements:
-                        if element.is_displayed() and element.is_enabled():
-                            driver.execute_script("arguments[0].click();", element)
-                            time.sleep(1)
-                            return True
-            return False
-        except:
-            return False
-    
-    def _click_by_class_name(self, driver):
-        """Click by common class names"""
-        try:
-            class_patterns = [
-                "*[class*='checkbox']",
-                "*[class*='recaptcha']",
-                "*[class*='captcha']",
-                "*[class*='verify']",
-                "*[class*='robot']",
-                "*[class*='human']",
-                ".recaptcha-checkbox",
-                ".g-recaptcha",
-                ".captcha",
-                ".verify-checkbox"
-            ]
-            
-            for pattern in class_patterns:
-                elements = driver.find_elements(By.CSS_SELECTOR, pattern)
-                for element in elements:
-                    if element.is_displayed() and element.is_enabled():
-                        driver.execute_script("arguments[0].click();", element)
-                        time.sleep(1)
-                        return True
-            return False
-        except:
-            return False
-    
-    def _click_by_id(self, driver):
-        """Click by common IDs"""
-        try:
-            id_patterns = [
-                "*[id*='checkbox']",
-                "*[id*='recaptcha']",
-                "*[id*='captcha']",
-                "*[id*='verify']",
-                "*[id*='robot']",
-                "*[id*='human']"
-            ]
-            
-            for pattern in id_patterns:
-                elements = driver.find_elements(By.CSS_SELECTOR, pattern)
-                for element in elements:
-                    if element.is_displayed() and element.is_enabled():
-                        driver.execute_script("arguments[0].click();", element)
-                        time.sleep(1)
-                        return True
-            return False
-        except:
-            return False
-    
-    def _click_recaptcha(self, driver):
-        """Specifically handle reCAPTCHA"""
-        try:
-            # Common reCAPTCHA iframes and elements
-            recaptcha_selectors = [
-                "iframe[src*='recaptcha']",
-                "div.recaptcha-checkbox",
-                ".g-recaptcha",
-                "div[data-sitekey]"
-            ]
-            
-            for selector in recaptcha_selectors:
-                elements = driver.find_elements(By.CSS_SELECTOR, selector)
-                for element in elements:
-                    if element.is_displayed():
-                        driver.execute_script("arguments[0].click();", element)
-                        time.sleep(2)
-                        return True
-            return False
-        except:
-            return False
-    
-    def _refresh_page(self, driver):
-        """Simple refresh as last resort"""
-        try:
-            print("🔄 Refreshing page as fallback...")
-            driver.refresh()
-            time.sleep(3)
-            return True
-        except:
-            return False
-    
-    def handle_bot_protection(self, driver):
-        """Handle bot protection with focus on checkbox solving"""
-        try:
-            page_source = driver.page_source.lower()
-            
-            # Check for checkboxes and "I'm not a robot"
-            checkbox_indicators = [
-                'checkbox', 'i\'m not a robot', 'not a robot', 'recaptcha',
-                'verify you are human', 'robot', 'captcha', 'challenge'
-            ]
-            
-            if any(indicator in page_source for indicator in checkbox_indicators):
-                print("🛡️ Checkbox protection detected, attempting to solve...")
-                if self.detect_and_click_checkbox(driver):
-                    time.sleep(2)
-                    return True
-            
-            # Also handle simple delays
-            if 'just a moment' in page_source or 'checking your browser' in page_source:
-                print("🛡️ Cloudflare detected, waiting...")
-                time.sleep(5)
-                return True
-            
-            return False
-            
-        except Exception as e:
-            print(f"❌ Bot protection handling failed: {e}")
-            return False
+        return unique_candidates
 
-class JobTypeClassifier:
-    def predict(self, text):
-        text_lower = text.lower()
+    def predict(self, html_content):
+        """Extract job information using ML models"""
+        soup = BeautifulSoup(html_content, 'html.parser')
+        candidates = self._get_quality_candidates(soup)
         
-        if any(word in text_lower for word in ['remote', 'work from home', 'wfh']):
-            return 'Remote'
-        elif any(word in text_lower for word in ['contract', 'contractor', 'freelance']):
-            return 'Contract'
-        elif any(word in text_lower for word in ['intern', 'internship', 'trainee']):
-            return 'Internship'
-        elif any(word in text_lower for word in ['part time', 'part-time']):
-            return 'Part-time'
+        if not candidates:
+            return {field: "Not Found" for field in self.fields}
+        
+        candidates_df = pd.DataFrame(candidates)
+        features_list = [self._create_advanced_features(text) for text in candidates_df['text']]
+        features_df = pd.DataFrame(features_list)
+        features_df['tag'] = candidates_df['tag']
+        
+        extracted_data = {field: "Not Specified" for field in self.fields}
+        confidence_scores = {field: 0.0 for field in self.fields}
+        used_indices = set()
+        
+        for field, pipeline in self.pipelines.items():
+            try:
+                probabilities = pipeline.predict_proba(features_df)[:, 1]
+                
+                best_score = 0
+                best_idx = -1
+                
+                for idx, score in enumerate(probabilities):
+                    if idx not in used_indices and score > best_score and score > 0.6:
+                        best_score = score
+                        best_idx = idx
+                
+                if best_idx != -1:
+                    extracted_data[field] = candidates_df.loc[best_idx, 'text']
+                    confidence_scores[field] = best_score
+                    used_indices.add(best_idx)
+                    print(f"        {field}: {extracted_data[field][:50]}... (confidence: {best_score:.3f})")
+                    
+            except Exception as e:
+                print(f"        [!] Error predicting {field}: {e}")
+                continue
+        
+        extracted_data['ML_Confidence_Avg'] = np.mean(list(confidence_scores.values())) if confidence_scores else 0
+        
+        return extracted_data
+
+def create_requests_session():
+    """Create a robust requests session with retry strategy"""
+    session = requests.Session()
+    retry_strategy = Retry(
+        total=3,
+        backoff_factor=1,
+        status_forcelist=[429, 500, 502, 503, 504],
+    )
+    adapter = HTTPAdapter(max_retries=retry_strategy)
+    session.mount("http://", adapter)
+    session.mount("https://", adapter)
+    
+    session.headers.update({
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.5',
+        'Accept-Encoding': 'gzip, deflate, br',
+        'DNT': '1',
+        'Connection': 'keep-alive',
+        'Upgrade-Insecure-Requests': '1',
+        'Sec-Fetch-Dest': 'document',
+        'Sec-Fetch-Mode': 'navigate',
+        'Sec-Fetch-Site': 'none',
+        'Cache-Control': 'max-age=0',
+    })
+    
+    return session
+
+def extract_with_requests_enhanced(link, ml_extractor):
+    """Enhanced request-based extraction with better error handling"""
+    session = create_requests_session()
+    
+    try:
+        print(f"      📡 Using enhanced requests for: {link[:60]}...")
+        response = session.get(link, timeout=30)
+        
+        if response.status_code == 200:
+            # Check if we got a valid HTML page
+            if '<!DOCTYPE html' in response.text[:100] or '<html' in response.text[:100]:
+                job_data = ml_extractor.predict(response.text)
+                job_data['Job Link'] = link
+                job_data['Extraction_Method'] = 'requests'
+                return job_data
+            else:
+                print(f"      ⚠️  Received non-HTML response from {link}")
+                return None
+        elif response.status_code == 403:
+            print(f"      🔒 Access forbidden (403) for {link}")
+            return None
+        elif response.status_code == 429:
+            print(f"      🚫 Rate limited (429) for {link}")
+            time.sleep(10)
+            return None
         else:
-            return 'Full-time'
+            print(f"      ❌ HTTP {response.status_code} for {link}")
+            return None
+            
+    except requests.exceptions.Timeout:
+        print(f"      ⏰ Request timeout for {link}")
+        return None
+    except requests.exceptions.ConnectionError:
+        print(f"      🔌 Connection error for {link}")
+        return None
+    except Exception as e:
+        print(f"      ❌ Request error for {link}: {str(e)[:100]}")
+        return None
 
-class SmartExperienceExtractor:
-    def extract(self, text, title=""):
-        """Enhanced experience extraction with special handling for internships"""
-        text_lower = text.lower()
-        title_lower = title.lower()
-        
-        # Check if it's an internship role
-        is_internship = any(word in text_lower or word in title_lower 
-                           for word in ['intern', 'internship', 'trainee', 'fresher'])
-        
-        # If it's an internship, handle specially
-        if is_internship:
-            return self._extract_internship_experience(text_lower)
-        
-        # For regular jobs, use standard extraction
-        return self._extract_regular_experience(text_lower)
-    
-    def _extract_internship_experience(self, text_lower):
-        """Extract experience specifically for internship roles"""
-        
-        # Patterns to look for in internship descriptions
-        internship_patterns = [
-            (r'(\d+)\s*[-–to]+\s*(\d+)\s*(months?|years?)', 'range_months_years'),
-            (r'(\d+)\s*\+\s*(months?|years?)', 'plus_months_years'),
-            (r'(\d+)\s*(months?|years?)', 'single_months_years'),
-            (r'(\d+)\s*week', 'weeks'),
-            (r'(\d+)\s*month', 'months_single'),
-            (r'(\d+)\s*year', 'years_single'),
-        ]
-        
-        # First, try to find explicit experience requirements for internships
-        for pattern, pattern_type in internship_patterns:
-            match = re.search(pattern, text_lower)
-            if match:
-                if pattern_type == 'range_months_years':
-                    num1, num2 = int(match.group(1)), int(match.group(2))
-                    unit = match.group(3)
-                    if 'month' in unit:
-                        return 0, max(num1, num2) / 12  # Convert months to years
-                    else:
-                        return num1, num2
-                elif pattern_type == 'plus_months_years':
-                    num = int(match.group(1))
-                    unit = match.group(2)
-                    if 'month' in unit:
-                        return 0, (num + 6) / 12  # Convert months to years
-                    else:
-                        return num, num + 1
-                elif pattern_type == 'single_months_years':
-                    num = int(match.group(1))
-                    unit = match.group(2)
-                    if 'month' in unit:
-                        return 0, num / 12  # Convert months to years
-                    else:
-                        return num, num
-                elif pattern_type == 'weeks':
-                    num = int(match.group(1))
-                    return 0, num / 52  # Convert weeks to years
-                elif pattern_type == 'months_single':
-                    num = int(match.group(1))
-                    return 0, num / 12  # Convert months to years
-                elif pattern_type == 'years_single':
-                    num = int(match.group(1))
-                    return 0, num
-        
-        # If no specific experience mentioned for internship, return 0
-        return 0, 0
-    
-    def _extract_regular_experience(self, text_lower):
-        """Extract experience for regular job roles"""
-        
-        patterns = [
-            (r'(\d+)\s*[-–to]+\s*(\d+)\s*years?', 'range'),
-            (r'(\d+)\s*\+\s*years?', 'plus'),
-            (r'minimum\s*(\d+)\s*years?', 'minimum'),
-            (r'(\d+)\s*years?', 'single'),
-        ]
-        
-        for pattern, pattern_type in patterns:
-            match = re.search(pattern, text_lower)
-            if match:
-                if pattern_type == 'range':
-                    return int(match.group(1)), int(match.group(2))
-                elif pattern_type == 'plus':
-                    num = int(match.group(1))
-                    return num, num + 3
-                elif pattern_type == 'minimum':
-                    num = int(match.group(1))
-                    return num, num + 2
-                elif pattern_type == 'single':
-                    num = int(match.group(1))
-                    return num, num
-        
-        # Default for regular jobs with no experience mentioned
-        return 0, 0
-
-def setup_stealth_driver_fast():
-    """Fast driver setup"""
+def setup_stealth_driver_light():
+    """Minimal driver setup for LinkedIn to avoid detection"""
     options = Options()
+    
+    # Minimal options for stability
     options.add_argument("--headless")
-    options.add_argument("--disable-gpu")
-    options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
+    options.add_argument("--no-sandbox")
+    options.add_argument("--disable-gpu")
+    
+    # Essential anti-detection
     options.add_argument("--disable-blink-features=AutomationControlled")
     options.add_experimental_option("excludeSwitches", ["enable-automation"])
     options.add_experimental_option('useAutomationExtension', False)
-    
-    # Faster page loads
-    options.page_load_strategy = 'eager'
-    
-    user_agents = [
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    ]
-    options.add_argument(f"user-agent={random.choice(user_agents)}")
     
     try:
         service = Service()
         driver = webdriver.Chrome(service=service, options=options)
         
+        # Minimal stealth
         stealth(driver,
-            languages=["en-US", "en"],
-            vendor="Google Inc.",
-            platform="Win32",
-            webgl_vendor="Intel Inc.",
-            renderer="Intel Iris OpenGL Engine",
-            fix_hairline=True,
-        )
-        
+                languages=["en-US", "en"],
+                vendor="Google Inc.", 
+                platform="Win32",
+                fix_hairline=False,
+                )
         return driver
     except Exception as e:
-        print(f"Failed to initialize Chrome driver: {e}")
+        print(f"Driver initialization failed: {e}")
         return None
 
-def fast_delay(min_sec=0.5, max_sec=1.5):
-    """Reduced delays for faster scraping"""
-    time.sleep(random.uniform(min_sec, max_sec))
-
-def safe_find(soup, selectors, default="Not specified"):
-    if isinstance(selectors, str):
-        selectors = [selectors]
-    
-    for selector in selectors:
-        try:
-            element = soup.select_one(selector)
-            if element:
-                text = element.get_text(strip=True)
-                if text:
-                    return text
-        except:
-            continue
-    
-    return default
-
-def safe_find_link(parent, selectors, base_url):
-    if isinstance(selectors, str):
-        selectors = [selectors]
-    
-    for selector in selectors:
-        try:
-            element = parent.select_one(selector)
-            if element:
-                link = element.get('href')
-                if link:
-                    if link.startswith('/'):
-                        return urljoin(base_url, link)
-                    elif link.startswith('http'):
-                        return link
-                    else:
-                        return urljoin(base_url, '/' + link.lstrip('/'))
-        except:
-            continue
-    
-    return None
-
-def build_search_url(site, query, page_num=1):
+def scrape_site_links_enhanced(site, query, unique_links_lock, unique_links):
+    """Enhanced link scraping with LinkedIn-specific handling"""
     config = SITE_CONFIG[site]
-    formatted_query = query.replace(' ', '-').lower()
-    base_url = config['url_template'].format(query=formatted_query)
     
-    if page_num == 1:
-        return base_url
+    # For LinkedIn, use requests instead of Selenium
+    if site == 'linkedin':
+        return scrape_linkedin_links(query, unique_links_lock, unique_links)
     
-    if site == 'indeed':
-        start_param = (page_num - 1) * 10
-        return base_url + config['pagination_param'].format(page=start_param)
-    elif site == 'naukri':
-        return base_url + config['pagination_param'].format(page=page_num)
-    elif site == 'linkedin':
-        start_param = (page_num - 1) * 25
-        return base_url + config['pagination_param'].format(page=start_param)
-    else:
-        return base_url + config['pagination_param'].format(page=page_num)
-
-def scrape_site_links_parallel(site, query, unique_jobs_lock, unique_jobs):
-    """Parallel link scraping"""
-    config = SITE_CONFIG[site]
-    driver = setup_stealth_driver_fast()
-    checkbox_solver = CheckboxSolver()
-    
-    if not driver:
+    # For other sites, use Selenium
+    driver = setup_stealth_driver_light()
+    if not driver: 
         return 0
     
+    links_found_on_site = 0
     try:
-        links_found = 0
-        for page_num in range(1, PAGES_TO_SCRAPE + 1):
-            if len(unique_jobs) >= MAX_JOBS_TARGET:
-                break
-                
-            search_url = build_search_url(site, query, page_num)
-            driver.get(search_url)
-            fast_delay(1, 2)
+        for i in range(PAGES_TO_SCRAPE):
+            with unique_links_lock:
+                if len(unique_links) >= MAX_JOBS_TARGET:
+                    return links_found_on_site
             
-            # Handle bot protection with checkbox solver
-            checkbox_solver.handle_bot_protection(driver)
+            if site == 'indeed': 
+                page_num = i * 10
+            else: 
+                page_num = i + 1
+                
+            formatted_query = quote_plus(query) if site != 'naukri' else query.replace(' ', '-')
+            search_url = config['search_url'].format(query=formatted_query, page_num=page_num)
+            
+            print(f"  🔍 Scraping {site}: {search_url}")
+            driver.get(search_url)
+            time.sleep(random.uniform(3, 5))
             
             soup = BeautifulSoup(driver.page_source, "html.parser")
+            link_elements = soup.select(config['link_selector'])
             
-            # Check for no results
-            page_text = soup.get_text().lower()
-            if any(msg in page_text for msg in ['no results', 'no jobs found']):
+            if not link_elements:
+                print(f"    No links found on {site} page {i+1}")
                 break
-            
-            # Extract cards
-            cards = []
-            for selector in config['selectors']['card']:
-                cards = soup.select(selector)
-                if cards:
-                    break
-            
-            if not cards:
-                break
-            
-            # Extract links
-            page_links = 0
-            for card in cards[:20]:
-                link = safe_find_link(card, config['selectors']['link'], config['base_url'])
-                if link:
-                    with unique_jobs_lock:
-                        if link not in unique_jobs:
-                            unique_jobs[link] = {'site': site, 'query': query}
-                            links_found += 1
-                            page_links += 1
-            
-            if page_links == 0 and page_num > 1:
-                break
-                
+
+            for link_el in link_elements:
+                href = link_el.get('href')
+                if href:
+                    full_link = urljoin(config['base_url'], href)
+                    with unique_links_lock:
+                        if len(unique_links) < MAX_JOBS_TARGET and full_link not in unique_links:
+                            unique_links.add(full_link)
+                            links_found_on_site += 1
     except Exception as e:
-        print(f"Error scraping {site}: {str(e)}")
+        print(f"Error scraping links from {site} for '{query}': {e}")
     finally:
         driver.quit()
+    return links_found_on_site
+
+def scrape_linkedin_links(query, unique_links_lock, unique_links):
+    """Scrape LinkedIn links using requests to avoid detection"""
+    session = create_requests_session()
+    links_found = 0
+    
+    try:
+        for i in range(PAGES_TO_SCRAPE):
+            with unique_links_lock:
+                if len(unique_links) >= MAX_JOBS_TARGET:
+                    return links_found
+            
+            page_num = i * 25
+            formatted_query = quote_plus(query)
+            search_url = f"https://www.linkedin.com/jobs-guest/jobs/api/seeMoreJobPostings/search?keywords={formatted_query}&location=India&start={page_num}"
+            
+            print(f"  🔍 Scraping LinkedIn API: {query} - page {i+1}")
+            
+            response = session.get(search_url, timeout=30)
+            if response.status_code == 200:
+                soup = BeautifulSoup(response.text, "html.parser")
+                link_elements = soup.select('a.base-card__full-link')
+                
+                for link_el in link_elements:
+                    href = link_el.get('href')
+                    if href:
+                        with unique_links_lock:
+                            if len(unique_links) < MAX_JOBS_TARGET and href not in unique_links:
+                                unique_links.add(href)
+                                links_found += 1
+            else:
+                print(f"    LinkedIn API returned {response.status_code}")
+                break
+                
+            time.sleep(2)  # Be respectful to LinkedIn
+            
+    except Exception as e:
+        print(f"Error scraping LinkedIn links for '{query}': {e}")
     
     return links_found
 
-def extract_job_details_parallel(link_meta_tuple):
-    """Parallel job detail extraction"""
-    link, meta = link_meta_tuple
-    driver = setup_stealth_driver_fast()
-    ml_classifier = JobTypeClassifier()
-    exp_extractor = SmartExperienceExtractor()
-    checkbox_solver = CheckboxSolver()
+def extract_job_details_safe(link, ml_extractor, site):
+    """Safe extraction that primarily uses requests, with Selenium as last resort"""
     
-    if not driver:
-        return None
+    # Always try requests first (more stable)
+    result = extract_with_requests_enhanced(link, ml_extractor)
+    if result:
+        result['Source Site'] = site
+        result['Extraction_Method'] = 'requests'
+        return result
     
-    try:
-        driver.get(link)
-        fast_delay(2, 3)
-        
-        # Handle bot protection with checkbox solver
-        checkbox_solver.handle_bot_protection(driver)
-        
-        soup = BeautifulSoup(driver.page_source, "html.parser")
-        site = meta['site']
-        config = SITE_CONFIG[site]
-        
-        # Extract fields
-        title = safe_find(soup, config['selectors']['detail_title'])
-        company = safe_find(soup, config['selectors']['detail_company'])
-        location = safe_find(soup, config['selectors']['detail_location'])
-        description = safe_find(soup, config['selectors']['detail_description'], "")
-        posted_date = safe_find(soup, config['selectors']['detail_date'])
-        
-        if title == "Not specified" and company == "Not specified":
+    # Only use Selenium as last resort for non-LinkedIn sites
+    if site != 'linkedin':
+        print(f"    🚗 Fallback to Selenium for: {link[:60]}...")
+        driver = setup_stealth_driver_light()
+        if not driver: 
             return None
         
-        # Classification and SMART experience extraction
-        job_type = ml_classifier.predict(f"{title} {description}")
-        min_exp, max_exp = exp_extractor.extract(description, title)
-        
-        # Format experience string
-        if min_exp == 0 and max_exp == 0:
-            experience_years = "0"
-        elif min_exp == max_exp:
-            experience_years = f"{max_exp}"
-        else:
-            experience_years = f"{min_exp}-{max_exp}"
-        
-        job_data = {
-            'Job Title': title,
-            'Company': company,
-            'Location': location,
-            'Job Type': job_type,
-            'Experience': experience_years,
-            'Posted Date': posted_date,
-            'Job Link': link,
-        }
-        
-        print(f"      ✓ {title[:30]}... | Exp: {experience_years} | Type: {job_type}")
-        return job_data
-        
-    except Exception as e:
-        print(f"      ✗ Error extracting job: {str(e)[:50]}")
-        return None
-    finally:
-        driver.quit()
+        try:
+            driver.get(link)
+            time.sleep(3)  # Simple wait instead of complex conditions
+            
+            page_html = driver.page_source
+            job_data = ml_extractor.predict(page_html)
+            job_data['Job Link'] = link
+            job_data['Source Site'] = site
+            job_data['Extraction_Method'] = 'selenium'
+            
+            print(f"      ✓ Selenium extraction completed")
+            return job_data
+            
+        except Exception as e:
+            print(f"      ✗ Selenium extraction failed: {str(e)[:100]}")
+            return None
+        finally:
+            driver.quit()
+    
+    return None
 
-def run_scraper_parallel():
+def run_scraper():
+    """Main scraping function with enhanced stability"""
     start_time = time.time()
+    print("="*80)
+    print(f" STABLE ML JOB SCRAPER (TARGET: {MAX_JOBS_TARGET} JOBS)")
+    print("="*80)
     
-    print("=" * 80)
-    print(" PARALLEL JOB SCRAPER WITH CHECKBOX SOLVER")
-    print(f"Target: {MIN_JOBS_TARGET}-{MAX_JOBS_TARGET} jobs")
-    print(f"Workers: {MAX_WORKERS}")
-    print(f"Started: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    print("=" * 80)
+    try:
+        ml_extractor = AdvancedMLExtractor(models_dir=MODELS_DIR)
+    except RuntimeError as e:
+        print(f"[FATAL ERROR] {e}")
+        return
+
+    print("\n[1/3] Collecting job links (LinkedIn via API)...")
+    unique_links = set()
+    unique_links_lock = Lock()
     
-    # Initialize Checkbox solver
-    print("\n[1/4] Loading Checkbox detection...")
-    checkbox_solver = CheckboxSolver()
-    
-    # STEP 2: Parallel link collection
-    print(f"\n[2/4] Parallel link collection...")
-    unique_jobs = {}
-    unique_jobs_lock = Lock()
-    
-    all_queries = []
-    for category_queries in SEARCH_QUERIES.values():
-        all_queries.extend(category_queries)
-    
-    # Parallel link scraping
-    with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-        futures = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:  # Single worker for LinkedIn
+        all_tasks = [('linkedin', query) for query in SEARCH_QUERIES[:3]]  # Limit queries
+        futures = {executor.submit(scrape_linkedin_links, query, unique_links_lock, unique_links) for site, query in all_tasks}
         
-        for query in all_queries:
-            if len(unique_jobs) >= MAX_JOBS_TARGET:
-                break
-                
-            for site in SITE_CONFIG:
-                if len(unique_jobs) >= MAX_JOBS_TARGET:
-                    break
-                    
-                future = executor.submit(
-                    scrape_site_links_parallel, 
-                    site, query, unique_jobs_lock, unique_jobs
-                )
-                futures.append(future)
-        
-        # Wait for completion
         for future in concurrent.futures.as_completed(futures):
-            try:
-                links_found = future.result()
-                print(f"    Thread completed: {links_found} links | Total: {len(unique_jobs)}")
-            except Exception as e:
-                print(f"    Thread failed: {e}")
+            result = future.result()
+            print(f"    Found {result} new links. Total: {len(unique_links)}")
+            if len(unique_links) >= MAX_JOBS_TARGET:
+                print("    Target reached. Stopping link collection.")
+                executor.shutdown(wait=False, cancel_futures=True)
+                break
     
-    print(f"\n    ✓ Final collection: {len(unique_jobs)} job links")
+    links_to_process = list(unique_links)[:MAX_JOBS_TARGET]
+    print(f"\n    ✓ Collected {len(links_to_process)} unique job links")
     
-    # STEP 3: Parallel detail extraction
-    print(f"\n[3/4] Parallel job detail extraction...")
+    # All links are from LinkedIn
+    link_site_map = {link: 'linkedin' for link in links_to_process}
+
+    print(f"\n[2/3] Extracting job details using requests (no Selenium for LinkedIn)...")
     all_jobs = []
-    job_links = list(unique_jobs.items())
     
-    with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-        results = executor.map(extract_job_details_parallel, job_links)
+    # Process all links with requests only (no Selenium for LinkedIn)
+    for i, link in enumerate(links_to_process):
+        print(f"    Processing {i+1}/{len(links_to_process)}: {link[:80]}...")
         
-        for result in results:
-            if result:
-                all_jobs.append(result)
+        result = extract_with_requests_enhanced(link, ml_extractor)
+        if result:
+            result['Source Site'] = 'linkedin'
+            all_jobs.append(result)
+            print(f"      ✅ Success: {result.get('Job Title', 'N/A')[:40]}...")
+        else:
+            print(f"      ❌ Failed to extract")
+        
+        # Small delay between requests
+        time.sleep(1)
     
-    # STEP 4: Save results
-    print(f"\n[4/4] Saving {len(all_jobs)} jobs...")
-    
+    print(f"\n[3/3] Saving {len(all_jobs)} extracted jobs...")
     if all_jobs:
         df = pd.DataFrame(all_jobs)
-        df.drop_duplicates(subset=['Job Link'], keep='first', inplace=True)
+        required_columns = ['Job Title', 'Company', 'Location', 'Job Type', 'Experience', 'Posted Date', 'Job Link', 'Source Site']
+        for col in required_columns:
+            if col not in df.columns:
+                df[col] = "Not Found"
+        
+        df = df[required_columns]
         df.to_csv(OUTPUT_FILE, index=False, encoding='utf-8')
+        print(f"    ✓ Data saved to {OUTPUT_FILE}")
         
-        execution_time = (time.time() - start_time) / 60
-        
-        print("\n" + "=" * 80)
-        print(" PARALLEL SCRAPING COMPLETE!")
-        print("=" * 80)
-        print(f" Execution Time: {execution_time:.2f} minutes")
-        print(f" Jobs collected: {len(all_jobs)}")
-        print(f" After deduplication: {len(df)}")
-        
-        # Show internship statistics
-        internship_count = len(df[df['Job Type'] == 'Internship'])
-        print(f"🎓 Internships found: {internship_count}")
-        
-        if len(df) >= MIN_JOBS_TARGET:
-            print(" SUCCESS: Target achieved!")
-        else:
-            print(f" Got {len(df)} jobs (target was {MIN_JOBS_TARGET}+)")
-        
-        print(f"\nJob Type Distribution:")
-        for job_type, count in df['Job Type'].value_counts().items():
-            print(f"    {job_type}: {count}")
-        
-        print(f"\nData saved: {OUTPUT_FILE}")
-        print("=" * 80)
+        # Print extraction statistics
+        print("\n📊 Extraction Statistics:")
+        for field in ['Job Title', 'Company', 'Location', 'Job Type', 'Experience', 'Posted Date']:
+            found_count = df[df[field] != "Not Specified"][field].count()
+            print(f"    {field}: {found_count}/{len(df)} ({found_count/len(df)*100:.1f}%)")
+    
+    execution_time = (time.time() - start_time) / 60
+    print("\n" + "=" * 80)
+    print("🎉 SCRAPING COMPLETE!")
+    print(f"⏱️  Execution Time: {execution_time:.2f} minutes")
+    print(f"📋 Jobs Extracted: {len(all_jobs)}")
+    print("="*80)
 
 if __name__ == "__main__":
-    run_scraper_parallel()
+    run_scraper()
