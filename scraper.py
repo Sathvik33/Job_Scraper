@@ -1,3 +1,4 @@
+
 import os
 import time
 import random
@@ -627,15 +628,19 @@ def run_scraper_with_config(user_config=None):
     start_time = time.time()
     
     config = user_config if user_config else JOB_CONFIG
-    search_queries = build_search_queries(config)
-    
+    if user_config and 'job_titles' in user_config and user_config['job_titles']:
+        search_queries = user_config['job_titles']
+        print(f"Using {len(search_queries)} job titles directly from UI configuration.")
+    else:
+        search_queries = build_search_queries(config)
+
     print("="*80)
-    print(f"ENHANCED JOB SCRAPER v2.0")
+    print(f"ENHANCED JOB SCRAPER")
     print("="*80)
     print(f"Configuration:")
     print(f"   • Queries: {len(search_queries)}")
     print(f"   • Pages: 2")
-    print(f"   • Workers: 2")
+    print(f"   • Workers: 3")
     print("="*80)
     
     try:
@@ -651,7 +656,7 @@ def run_scraper_with_config(user_config=None):
     limited_queries = search_queries[:10]
     print(f"🔧 Processing {len(limited_queries)} queries")
     
-    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
         futures = []
         
         for location in config['locations']:
