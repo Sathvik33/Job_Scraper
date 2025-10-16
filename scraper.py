@@ -38,7 +38,6 @@ JOB_CONFIG = {
     'locations': ['India'],
     'job_types': ['full-time', 'internship'],
     'platforms': ['linkedin'],
-    'max_jobs': 20,
 }
 
 JOB_CATEGORIES = {
@@ -254,6 +253,29 @@ class AdvancedMLExtractor:
             
         return False
 
+    def _is_valid_experience_text(self, text):
+        """Enhanced validation for experience text"""
+        if not text or not isinstance(text, str):
+            return False
+            
+        text_lower = text.lower().strip()
+        
+        # Skip if it contains blacklisted terms
+        blacklist_terms = ['similar search', 'industries', 'companies', 'show more']
+        if any(term in text_lower for term in blacklist_terms):
+            return False
+        
+        # Must contain experience-related keywords or numbers
+        experience_indicators = [
+            'year', 'yr', 'experience', 'exp', 'fresher', 'entry', 
+            'senior', 'junior', 'mid', 'level'
+        ]
+        
+        has_experience_keywords = any(indicator in text_lower for indicator in experience_indicators)
+        has_numbers = any(char.isdigit() for char in text)
+        
+        return has_experience_keywords or has_numbers
+
     def _get_quality_candidates(self, soup):
         """Extract candidate text elements with better filtering"""
         candidates = []
@@ -293,45 +315,83 @@ class AdvancedMLExtractor:
         
         return unique_candidates
 
-    def _extract_experience_from_text(self, text):
+    def _extract_experience_from_text_enhanced(self, text):
         """ENHANCED: Extract experience years from text with better patterns"""
         if not text or not isinstance(text, str):
             return "0"
         
         text_lower = text.lower().strip()
         
-        # Pattern 1: Range format "2-4 years" or "2 - 4 years"
-        range_match = re.search(r'(\d+)\s*[-–—to]\s*(\d+)\s*(?:years?|yrs?)', text_lower)
-        if range_match:
-            return f"{range_match.group(1)}-{range_match.group(2)}"
+        # Remove common noise words that might confuse the extraction
+        noise_words = ['similar search', 'industries', 'companies', 'show more', 'see all']
+        for noise in noise_words:
+            text_lower = text_lower.replace(noise, '')
         
-        # Pattern 2: Single number with plus "2+ years"
-        plus_match = re.search(r'(\d+)\+\s*(?:years?|yrs?)', text_lower)
+        # Pattern 1: Range format "2-4 years" or "2 - 4 years" or "2 to 4 years"
+        range_patterns = [
+            r'(\d+)\s*[-–—]\s*(\d+)\s*(?:years?|yrs?)',
+            r'(\d+)\s*to\s*(\d+)\s*(?:years?|yrs?)',
+            r'(\d+)\s*-\s*(\d+)\s*(?:years?|yrs?)'
+        ]
+        
+        for pattern in range_patterns:
+            range_match = re.search(pattern, text_lower)
+            if range_match:
+                min_years = int(range_match.group(1))
+                max_years = int(range_match.group(2))
+                return f"{min_years}-{max_years}"
+        
+        # Pattern 2: Single number with plus "2+ years" or "2 + years"
+        plus_match = re.search(r'(\d+)\s*\+\s*(?:years?|yrs?)', text_lower)
         if plus_match:
             return f"{plus_match.group(1)}+"
         
-        # Pattern 3: Exact years "2 years" or "2 yrs"
+        # Pattern 3: Exact years "2 years" or "2 yrs" or "2 year"
         exact_match = re.search(r'(\d+\.?\d*)\s*(?:years?|yrs?)', text_lower)
         if exact_match:
-            return str(int(float(exact_match.group(1))))
+            years = exact_match.group(1)
+            # Convert decimal to whole number if needed
+            if '.' in years:
+                years = str(int(float(years)))
+            return years
         
-        # Pattern 4: Just a number followed by year indicator
-        number_match = re.search(r'(\d+)\s*(?:year|yr)', text_lower)
-        if number_match:
-            return number_match.group(1)
+        # Pattern 4: Just numbers that likely represent years
+        # Look for numbers in context of experience keywords
+        if any(keyword in text_lower for keyword in ['year', 'yr', 'experience', 'exp']):
+            number_matches = re.findall(r'\b(\d+)\b', text_lower)
+            if number_matches:
+                # Take the first number found in experience context
+                for num in number_matches:
+                    num_int = int(num)
+                    if 0 <= num_int <= 50:  # Reasonable experience range
+                        return str(num_int)
         
-        # Check for fresher keywords
-        fresher_keywords = ['fresher', 'entry level', 'entry-level', '0 year', 'no experience', 'new grad', 'recent graduate']
+        # Enhanced fresher detection
+        fresher_keywords = [
+            'fresher', 'entry level', 'entry-level', '0 year', 'no experience', 
+            'new grad', 'recent graduate', 'fresh graduate', 'campus hire',
+            'student', 'trainee', 'beginner'
+        ]
         if any(keyword in text_lower for keyword in fresher_keywords):
             return "0"
         
-        # Check for experience level keywords and map to approximate years
-        if 'senior' in text_lower or 'lead' in text_lower:
-            return "5+"
-        elif 'mid-level' in text_lower or 'intermediate' in text_lower:
-            return "3-5"
-        elif 'junior' in text_lower:
-            return "1-2"
+        # Enhanced experience level mapping
+        level_keywords = {
+            'senior': "5+",
+            'lead': "5+", 
+            'principal': "8+",
+            'architect': "6+",
+            'mid-level': "3-5",
+            'mid level': "3-5",
+            'intermediate': "2-4",
+            'junior': "1-2",
+            'associate': "1-2",
+            'entry': "0-1"
+        }
+        
+        for keyword, exp_range in level_keywords.items():
+            if keyword in text_lower:
+                return exp_range
         
         return "0"
 
@@ -364,8 +424,8 @@ class AdvancedMLExtractor:
         
         return "Not Specified"
 
-    def _post_process_extracted_data(self, extracted_data):
-        """Enhanced post-processing with better validation"""
+    def _post_process_extracted_data_enhanced(self, extracted_data):
+        """Enhanced post-processing with better experience handling"""
         cleaned_data = extracted_data.copy()
         
         # Clean Job Title
@@ -408,24 +468,20 @@ class AdvancedMLExtractor:
             else:
                 cleaned_data['Job Type'] = self._normalize_job_type(job_type)
         
-        # ENHANCED: Clean and validate Experience with better extraction
+        # ENHANCED: Experience extraction with the new method
         if cleaned_data.get('Experience') != "Not Specified":
-            exp = cleaned_data['Experience']
-            # Try to extract actual experience value
-            extracted_exp = self._extract_experience_from_text(exp)
+            exp_text = cleaned_data['Experience']
+            extracted_exp = self._extract_experience_from_text_enhanced(exp_text)
             cleaned_data['Experience'] = extracted_exp
+            print(f"        Experience extracted: '{exp_text}' -> '{extracted_exp}'")
         else:
-            # If no experience found, try to extract from job title (for interns/freshers)
-            title = cleaned_data.get('Job Title', '')
-            if 'intern' in title.lower():
-                cleaned_data['Experience'] = "0"
-            else:
-                cleaned_data['Experience'] = "0"
+            # If no experience field found, try to extract from all candidates
+            cleaned_data['Experience'] = "0"
         
         return cleaned_data
 
     def predict(self, html_content):
-        """Main prediction method with enhanced extraction"""
+        """Main prediction method with enhanced experience extraction"""
         soup = BeautifulSoup(html_content, 'html.parser')
         candidates = self._get_quality_candidates(soup)
         
@@ -441,8 +497,14 @@ class AdvancedMLExtractor:
         confidence_scores = {field: 0.0 for field in self.fields}
         used_indices = set()
         
-        # Extract fields with validation
-        for field, pipeline in self.pipelines.items():
+        # Extract fields with validation - EXPERIENCE FIRST for better accuracy
+        field_priority = ['Experience', 'Job Title', 'Company', 'Location', 'Job Type', 'Posted Date']
+        
+        for field in field_priority:
+            pipeline = self.pipelines.get(field)
+            if not pipeline:
+                continue
+                
             try:
                 features_list = [self._create_advanced_features(text, field) for text in candidates_df['text']]
                 features_df = pd.DataFrame(features_list)
@@ -467,12 +529,11 @@ class AdvancedMLExtractor:
                     elif field == 'Job Type':
                         is_valid = self._is_valid_job_type(candidate_text)
                     elif field == 'Experience':
-                        # ENHANCED: Check if text actually contains experience info
-                        exp_extracted = self._extract_experience_from_text(candidate_text)
-                        is_valid = exp_extracted != "0" or any(term in candidate_text.lower() for term in ['fresher', 'entry', 'junior'])
+                        # ENHANCED: Use the new validation
+                        is_valid = self._is_valid_experience_text(candidate_text)
                     
-                    # Higher confidence threshold for Company and Job Type
-                    min_confidence = 0.7 if field in ['Company', 'Job Type'] else 0.5 if field == 'Experience' else 0.6
+                    # Adjusted confidence thresholds
+                    min_confidence = 0.6 if field == 'Experience' else 0.7 if field in ['Company', 'Job Type'] else 0.5
                     
                     if is_valid and score > best_score and score > min_confidence:
                         best_score = score
@@ -490,15 +551,18 @@ class AdvancedMLExtractor:
                 print(f"        [!] Error predicting {field}: {e}")
                 continue
         
-        # Post-process and validate
-        cleaned_data = self._post_process_extracted_data(extracted_data)
+        # Enhanced post-processing with better experience extraction
+        cleaned_data = self._post_process_extracted_data_enhanced(extracted_data)
         
-        # Ensure defaults
-        if not cleaned_data.get('Experience') or cleaned_data['Experience'] == "Not Specified":
-            cleaned_data['Experience'] = "0"
-        
-        if not cleaned_data.get('Job Type') or cleaned_data['Job Type'] == "":
-            cleaned_data['Job Type'] = "Not Specified"
+        # Final experience fallback - check job title for experience hints
+        if cleaned_data.get('Experience') in ["0", "Not Specified"]:
+            title = cleaned_data.get('Job Title', '').lower()
+            if 'intern' in title or 'fresher' in title:
+                cleaned_data['Experience'] = "0"
+            elif 'senior' in title or 'lead' in title:
+                cleaned_data['Experience'] = "5+"
+            elif 'junior' in title:
+                cleaned_data['Experience'] = "1-2"
         
         cleaned_data['ML_Confidence_Avg'] = np.mean(list(confidence_scores.values())) if confidence_scores else 0
         
@@ -806,24 +870,138 @@ def run_scraper_with_config(user_config=None):
         else:
             print(f"  ✓ No 'Industries' found in Job Type field")
         
+        # Enhanced experience statistics
         zero_exp_count = df[df['Experience'] == "0"].shape[0]
-        print(f"  ℹ️ Jobs with Experience '0': {zero_exp_count}/{len(df)} ({zero_exp_count/len(df)*100:.1f}%)")
-        
-        # ADDED: Better experience statistics
         exp_with_range = df[df['Experience'].str.contains('-', na=False)].shape[0]
-        print(f"  ✓ Jobs with experience range: {exp_with_range}/{len(df)} ({exp_with_range/len(df)*100:.1f}%)")
+        exp_with_plus = df[df['Experience'].str.contains('+', na=False)].shape[0]
+        valid_exp_count = len(df) - zero_exp_count
+        
+        print(f"  📊 Experience Statistics:")
+        print(f"     • Jobs with valid experience: {valid_exp_count}/{len(df)} ({valid_exp_count/len(df)*100:.1f}%)")
+        print(f"     • Jobs with experience range: {exp_with_range}/{len(df)} ({exp_with_range/len(df)*100:.1f}%)")
+        print(f"     • Jobs with 'X+ years': {exp_with_plus}/{len(df)} ({exp_with_plus/len(df)*100:.1f}%)")
+        print(f"     • Jobs marked as fresher (0): {zero_exp_count}/{len(df)} ({zero_exp_count/len(df)*100:.1f}%)")
+        
+        # Experience value distribution
+        print(f"\n  📈 Experience Value Distribution:")
+        exp_counts = df['Experience'].value_counts().head(10)
+        for exp, count in exp_counts.items():
+            percentage = (count/len(df)*100)
+            print(f"     • {exp:8s}: {count:3d} jobs ({percentage:5.1f}%)")
         
         not_specified_job_type = df[df['Job Type'] == "Not Specified"].shape[0]
-        print(f"  ℹ️ Jobs with unspecified type: {not_specified_job_type}/{len(df)} ({not_specified_job_type/len(df)*100:.1f}%)")
+        print(f"\n  ℹ️ Jobs with unspecified type: {not_specified_job_type}/{len(df)} ({not_specified_job_type/len(df)*100:.1f}%)")
+        
+        # Company statistics
+        unique_companies = df[df['Company'] != "Not Specified"]['Company'].nunique()
+        print(f"  🏢 Unique companies found: {unique_companies}")
+        
+        # Location statistics
+        unique_locations = df[df['Location'] != "Not Specified"]['Location'].nunique()
+        print(f"  📍 Unique locations found: {unique_locations}")
+        
+        # Job Type statistics
+        job_type_counts = df['Job Type'].value_counts()
+        print(f"\n  💼 Job Type Distribution:")
+        for job_type, count in job_type_counts.items():
+            percentage = (count/len(df)*100)
+            print(f"     • {job_type:12s}: {count:3d} jobs ({percentage:5.1f}%)")
     
     execution_time = (time.time() - start_time) / 60
     print("\n" + "=" * 80)
     print(f"✅ SCRAPING COMPLETED!")
     print(f"⏱️ Time: {execution_time:.2f} minutes")
     print(f"📊 Jobs: {len(all_jobs)}")
+    print(f"🎯 Target: {max_jobs} jobs")
+    print(f"📈 Success Rate: {len(all_jobs)/max_jobs*100:.1f}%")
     print("=" * 80)
+    
+    # Final summary with enhanced experience metrics
+    if all_jobs:
+        df = pd.DataFrame(all_jobs)
+        exp_extraction_rate = (df[df['Experience'] != "0"]['Experience'].count() / len(df)) * 100
+        print(f"\n🎯 EXPERIENCE EXTRACTION SUMMARY:")
+        print(f"   • Successful experience extraction: {exp_extraction_rate:.1f}%")
+        print(f"   • Enhanced patterns applied: ✓")
+        print(f"   • Fallback logic active: ✓")
+        
+        # Show sample of extracted experiences
+        print(f"\n📋 Sample of Extracted Experiences:")
+        sample_experiences = df[df['Experience'] != "0"][['Job Title', 'Experience']].head(5)
+        for _, row in sample_experiences.iterrows():
+            print(f"   • {row['Job Title'][:30]}... -> {row['Experience']}")
     
     return all_jobs
 
+# Test function for experience extraction
+def test_experience_extraction():
+    """Test the enhanced experience extraction on sample data"""
+    print("🧪 TESTING ENHANCED EXPERIENCE EXTRACTION")
+    print("=" * 60)
+    
+    try:
+        ml_extractor = AdvancedMLExtractor(models_dir=MODELS_DIR)
+        print("✅ ML Extractor loaded successfully")
+    except Exception as e:
+        print(f"❌ Failed to load ML Extractor: {e}")
+        return
+    
+    # Test cases for experience extraction
+    test_cases = [
+        ("2-4 years of experience", "2-4"),
+        ("5+ years experience", "5+"),
+        ("3 years exp", "3"),
+        ("1 to 3 years", "1-3"),
+        ("7+ yrs", "7+"),
+        ("fresher", "0"),
+        ("entry level", "0"),
+        ("senior developer", "5+"),
+        ("junior role", "1-2"),
+        ("mid-level position", "3-5"),
+        ("0-1 years", "0-1"),
+        ("10 years experience", "10"),
+        ("2.5 years", "2"),
+        ("1 year", "1"),
+        ("no experience required", "0"),
+        ("recent graduate", "0"),
+        ("minimum 3 years", "3"),
+        ("4-6 yrs", "4-6"),
+        ("8+ years of exp", "8+"),
+        ("fresh graduate", "0"),
+        ("0 years", "0"),
+        ("15+ years", "15+"),
+        ("2 - 5 years", "2-5"),
+    ]
+    
+    print("\n📊 Testing Text Pattern Extraction:")
+    print("-" * 40)
+    
+    success_count = 0
+    for test_text, expected in test_cases:
+        result = ml_extractor._extract_experience_from_text_enhanced(test_text)
+        status = "✅" if result == expected else "❌"
+        print(f"{status} '{test_text}' -> '{result}' (expected: '{expected}')")
+        if result == expected:
+            success_count += 1
+    
+    accuracy = success_count/len(test_cases)*100
+    print(f"\n🎯 Pattern Extraction Accuracy: {success_count}/{len(test_cases)} ({accuracy:.1f}%)")
+    
+    if accuracy >= 80:
+        print("✅ Experience extraction is working well!")
+    elif accuracy >= 60:
+        print("⚠️ Experience extraction needs improvement")
+    else:
+        print("❌ Experience extraction needs significant improvement")
+
 if __name__ == "__main__":
-    run_scraper_with_config()
+    # Check if we should run tests or full scraping
+    import sys
+    if len(sys.argv) > 1 and sys.argv[1] == 'test':
+        test_experience_extraction()
+    else:
+        # Run with 50 samples for testing
+        test_config = JOB_CONFIG.copy()
+        test_config['max_jobs'] = 50
+        print("🚀 Running enhanced scraper with 50 samples...")
+        run_scraper_with_config(test_config)
