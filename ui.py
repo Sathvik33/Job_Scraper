@@ -108,9 +108,15 @@ st.markdown("""
     """, unsafe_allow_html=True)
 
 # Initialize session state
-if 'jobs_data' not in st.session_state: st.session_state.jobs_data = None
-if 'scraping_complete' not in st.session_state: st.session_state.scraping_complete = False
-if 'last_scrape_time' not in st.session_state: st.session_state.last_scrape_time = None
+if 'jobs_data' not in st.session_state: 
+    st.session_state.jobs_data = None  # CHANGED: Start with None
+if 'scraping_complete' not in st.session_state: 
+    st.session_state.scraping_complete = False
+if 'last_scrape_time' not in st.session_state: 
+    st.session_state.last_scrape_time = None
+# ADDED: Track if we should load existing data
+if 'data_loaded' not in st.session_state:
+    st.session_state.data_loaded = False
 
 # Header
 st.title("💼 Smart Job Scraper Dashboard")
@@ -148,25 +154,31 @@ with st.sidebar:
     st.markdown("---")
     
     st.subheader("🌐 Platforms")
-    platforms = st.multiselect("Select job platforms", ["linkedin", "indeed", "naukri"], default=["linkedin", "indeed"])
+    platforms = st.multiselect("Select job platforms", ["linkedin", "indeed", "naukri"], default=["linkedin"])
     
     st.markdown("---")
 
-    max_jobs = st.number_input("Max Number of Jobs", min_value=10, max_value=2000, value=50, step=10)
+    # FIXED: Changed label to clarify it's the limit
+    max_jobs = st.number_input("Maximum Jobs to Scrape", min_value=10, max_value=500, value=50, step=10, 
+                                help="Maximum number of job listings to scrape")
 
     st.markdown("---")
 
     if st.button("🚀 Start Scraping", use_container_width=True):
         if not job_titles_selected:
-            st.warning("Please select at least one Job Title to start scraping.")
+            st.warning("⚠️ Please select at least one Job Title to start scraping.")
         else:
             with st.spinner("🔄 Scraping jobs... This may take a few minutes"):
+                # ADDED: Clear old data before scraping
+                st.session_state.jobs_data = None
+                st.session_state.data_loaded = False
+                
                 user_config = {
                     'job_titles': job_titles_selected,
                     'job_types': job_types_selected,
                     'locations': locations if locations else ['India'],
                     'platforms': platforms if platforms else ['linkedin'],
-                    'max_jobs': max_jobs
+                    'max_jobs': max_jobs  # FIXED: Now passed correctly
                 }
 
                 try:
@@ -176,23 +188,22 @@ with st.sidebar:
 
                     if os.path.exists(OUTPUT_FILE):
                         st.session_state.jobs_data = pd.read_csv(OUTPUT_FILE)
+                        st.session_state.data_loaded = True
                         st.success(f"✅ Successfully scraped {len(st.session_state.jobs_data)} jobs!")
                         st.rerun()
                     else:
                         st.error("❌ No data file found after scraping")
                 except Exception as e:
                     st.error(f"❌ Error during scraping: {str(e)}")
+                    import traceback
+                    st.error(traceback.format_exc())
 
 # Main content area
 if st.session_state.scraping_complete and st.session_state.last_scrape_time:
     st.info(f"🕒 Last scraped: {st.session_state.last_scrape_time.strftime('%Y-%m-%d %H:%M:%S')}")
 
-if st.session_state.jobs_data is None and os.path.exists(OUTPUT_FILE):
-    try:
-        st.session_state.jobs_data = pd.read_csv(OUTPUT_FILE)
-    except pd.errors.EmptyDataError:
-        st.session_state.jobs_data = pd.DataFrame() 
-    except Exception: pass
+# REMOVED: Automatic loading of old data
+# Now only loads data after scraping is complete
 
 # --- METRICS and RESULTS DISPLAY ---
 if st.session_state.jobs_data is not None and not st.session_state.jobs_data.empty:
@@ -201,13 +212,14 @@ if st.session_state.jobs_data is not None and not st.session_state.jobs_data.emp
     # Metrics row
     col1, col2, col3, col4 = st.columns(4)
     with col1:
-        st.metric("Total Jobs Found", len(df))
+        st.metric("📊 Total Jobs Found", len(df))
     with col2:
-        st.metric("Unique Companies", df[df['Company'] != 'Not Specified']['Company'].nunique())
+        st.metric("🏢 Unique Companies", df[df['Company'] != 'Not Specified']['Company'].nunique())
     with col3:
-        st.metric("Locations Found", df[df['Location'] != 'Not Specified']['Location'].nunique())
+        st.metric("📍 Locations Found", df[df['Location'] != 'Not Specified']['Location'].nunique())
     with col4:
-        st.metric("Full-time Jobs", len(df[df['Job Type'].str.contains('Full-time', case=False, na=False)]))
+        full_time_count = len(df[df['Job Type'].str.contains('Full-time', case=False, na=False)])
+        st.metric("💼 Full-time Jobs", full_time_count)
     
     st.markdown("<br>", unsafe_allow_html=True)
 
@@ -223,13 +235,39 @@ if st.session_state.jobs_data is not None and not st.session_state.jobs_data.emp
     with filter_col2:
         max_experience = st.number_input("Max Experience (Years)", min_value=0, max_value=50, value=50)
 
-    # Apply experience filter
+    # ENHANCED: Apply experience filter with better parsing
     filtered_df = df.copy()
-    filtered_df['Experience_Min'] = filtered_df['Experience'].apply(
-        lambda x: int(str(x).split('-')[0]) if '-' in str(x) else int(str(x)) if str(x).isdigit() else 0
-    )
+    
+    def parse_experience(exp_str):
+        """Parse experience string to get minimum years"""
+        if pd.isna(exp_str):
+            return 0
+        exp_str = str(exp_str).strip()
+        
+        # Handle range like "2-4"
+        if '-' in exp_str:
+            try:
+                return int(exp_str.split('-')[0])
+            except:
+                return 0
+        
+        # Handle plus like "5+"
+        if '+' in exp_str:
+            try:
+                return int(exp_str.replace('+', ''))
+            except:
+                return 0
+        
+        # Handle single number
+        try:
+            return int(float(exp_str))
+        except:
+            return 0
+    
+    filtered_df['Experience_Min'] = filtered_df['Experience'].apply(parse_experience)
+    
     if min_experience > max_experience:
-        st.warning("Min experience cannot be greater than max experience.")
+        st.warning("⚠️ Min experience cannot be greater than max experience.")
         min_experience, max_experience = max_experience, min_experience 
     
     filtered_df = filtered_df[
@@ -242,14 +280,64 @@ if st.session_state.jobs_data is not None and not st.session_state.jobs_data.emp
         viz_col1, viz_col2 = st.columns(2)
         with viz_col1:
             job_type_counts = filtered_df['Job Type'].value_counts()
-            fig1 = px.pie(values=job_type_counts.values, names=job_type_counts.index, title="Job Type Distribution", color_discrete_sequence=px.colors.qualitative.Set3)
-            fig1.update_layout(plot_bgcolor='rgba(255,255,255,0.9)', paper_bgcolor='rgba(255,255,255,0.9)', font=dict(size=12), title_font=dict(size=16, color='#1f2937', family='Arial Black'))
+            fig1 = px.pie(values=job_type_counts.values, names=job_type_counts.index, 
+                         title="Job Type Distribution", 
+                         color_discrete_sequence=px.colors.qualitative.Set3)
+            fig1.update_layout(plot_bgcolor='rgba(255,255,255,0.9)', 
+                              paper_bgcolor='rgba(255,255,255,0.9)', 
+                              font=dict(size=12), 
+                              title_font=dict(size=16, color='#1f2937', family='Arial Black'))
             st.plotly_chart(fig1, use_container_width=True)
+            
         with viz_col2:
             top_companies = filtered_df[filtered_df['Company'] != 'Not Specified']['Company'].value_counts().head(10)
-            fig2 = px.bar(x=top_companies.values, y=top_companies.index, orientation='h', title="Top 10 Companies Hiring", labels={'x': 'Number of Jobs', 'y': 'Company'}, color=top_companies.values, color_continuous_scale='Viridis')
-            fig2.update_layout(plot_bgcolor='rgba(255,255,255,0.9)', paper_bgcolor='rgba(255,255,255,0.9)', showlegend=False, font=dict(size=12), title_font=dict(size=16, color='#1f2937', family='Arial Black'))
+            fig2 = px.bar(x=top_companies.values, y=top_companies.index, 
+                         orientation='h', 
+                         title="Top 10 Companies Hiring", 
+                         labels={'x': 'Number of Jobs', 'y': 'Company'}, 
+                         color=top_companies.values, 
+                         color_continuous_scale='Viridis')
+            fig2.update_layout(plot_bgcolor='rgba(255,255,255,0.9)', 
+                              paper_bgcolor='rgba(255,255,255,0.9)', 
+                              showlegend=False, 
+                              font=dict(size=12), 
+                              title_font=dict(size=16, color='#1f2937', family='Arial Black'))
             st.plotly_chart(fig2, use_container_width=True)
+
+        # ADDED: Experience distribution chart
+        st.markdown("<br>", unsafe_allow_html=True)
+        exp_col1, exp_col2 = st.columns(2)
+        
+        with exp_col1:
+            # Experience distribution
+            exp_counts = filtered_df['Experience'].value_counts().head(10)
+            fig3 = px.bar(x=exp_counts.index, y=exp_counts.values,
+                         title="Experience Level Distribution",
+                         labels={'x': 'Experience', 'y': 'Number of Jobs'},
+                         color=exp_counts.values,
+                         color_continuous_scale='Blues')
+            fig3.update_layout(plot_bgcolor='rgba(255,255,255,0.9)', 
+                              paper_bgcolor='rgba(255,255,255,0.9)',
+                              showlegend=False,
+                              font=dict(size=12),
+                              title_font=dict(size=16, color='#1f2937', family='Arial Black'))
+            st.plotly_chart(fig3, use_container_width=True)
+        
+        with exp_col2:
+            # Location distribution
+            location_counts = filtered_df[filtered_df['Location'] != 'Not Specified']['Location'].value_counts().head(10)
+            fig4 = px.bar(x=location_counts.values, y=location_counts.index,
+                         orientation='h',
+                         title="Top 10 Locations",
+                         labels={'x': 'Number of Jobs', 'y': 'Location'},
+                         color=location_counts.values,
+                         color_continuous_scale='Greens')
+            fig4.update_layout(plot_bgcolor='rgba(255,255,255,0.9)', 
+                              paper_bgcolor='rgba(255,255,255,0.9)',
+                              showlegend=False,
+                              font=dict(size=12),
+                              title_font=dict(size=16, color='#1f2937', family='Arial Black'))
+            st.plotly_chart(fig4, use_container_width=True)
 
         # Job listings table (now using filtered_df)
         display_df = filtered_df[['Job Title', 'Company', 'Location', 'Job Type', 'Experience', 'Job Link']].copy()
@@ -264,9 +352,15 @@ if st.session_state.jobs_data is not None and not st.session_state.jobs_data.emp
         
         st.markdown("<br>", unsafe_allow_html=True)
         csv = filtered_df.to_csv(index=False)
-        st.download_button(label="⬇️ Download Filtered Data as CSV", data=csv, file_name=f"filtered_jobs_{datetime.now().strftime('%Y%m%d')}.csv", mime="text/csv", use_container_width=True)
+        st.download_button(
+            label="⬇️ Download Filtered Data as CSV", 
+            data=csv, 
+            file_name=f"filtered_jobs_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv", 
+            mime="text/csv", 
+            use_container_width=True
+        )
     else:
-        st.warning("No jobs match the current filter criteria.")
+        st.warning("⚠️ No jobs match the current filter criteria.")
 
 else:
     # Welcome screen
@@ -276,12 +370,17 @@ else:
             <h2 style='color: #1f2937; margin-bottom: 1rem;'>👋 Welcome to the Job Scraper Dashboard!</h2>
             <p style='color: #6b7280; font-size: 1.2rem; line-height: 1.8;'>
                 Configure your targeted job search in the sidebar.<br>
-                Select job titles, add preferences, and click <strong>"Start Scraping"</strong>!
+                Select job titles, set your preferences, and click <strong>"Start Scraping"</strong> to begin!
             </p>
-            <div style='margin-top: 2rem;'>
-                <span style='font-size: 3rem;'>🎯</span>
-                <span style='font-size: 3rem; margin: 0 1rem;'>💼</span>
-                <span style='font-size: 3rem;'>🚀</span>
+            <div style='margin-top: 2rem; padding: 1.5rem; background: #f3f4f6; border-radius: 10px;'>
+                <h3 style='color: #1f2937; margin-bottom: 1rem;'>✨ Features:</h3>
+                <ul style='color: #4b5563; text-align: left; display: inline-block; font-size: 1.1rem;'>
+                    <li>🎯 Multi-platform job scraping (LinkedIn, Indeed, Naukri)</li>
+                    <li>🤖 AI-powered data extraction</li>
+                    <li>📊 Interactive visualizations</li>
+                    <li>🔍 Advanced filtering by experience, location, and type</li>
+                    <li>💾 Export results to CSV</li>
+                </ul>
             </div>
         </div>
     """, unsafe_allow_html=True)

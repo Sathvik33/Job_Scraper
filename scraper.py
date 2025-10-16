@@ -1,4 +1,3 @@
-
 import os
 import time
 import random
@@ -39,6 +38,7 @@ JOB_CONFIG = {
     'locations': ['India'],
     'job_types': ['full-time', 'internship'],
     'platforms': ['linkedin'],
+    'max_jobs': 20,
 }
 
 JOB_CATEGORIES = {
@@ -294,30 +294,44 @@ class AdvancedMLExtractor:
         return unique_candidates
 
     def _extract_experience_from_text(self, text):
-        """Extract experience years from text"""
+        """ENHANCED: Extract experience years from text with better patterns"""
         if not text or not isinstance(text, str):
             return "0"
         
-        text_lower = text.lower()
+        text_lower = text.lower().strip()
         
-        # Pattern for "X years" or "X-Y years"
-        patterns = [
-            r'(\d+)\s*-\s*(\d+)\s*(?:years?|yrs?)',  # 2-4 years
-            r'(\d+)\+?\s*(?:years?|yrs?)',  # 2+ years or 2 years
-            r'(\d+\.?\d*)\s*(?:years?|yrs?)',  # 2.5 years
-        ]
+        # Pattern 1: Range format "2-4 years" or "2 - 4 years"
+        range_match = re.search(r'(\d+)\s*[-–—to]\s*(\d+)\s*(?:years?|yrs?)', text_lower)
+        if range_match:
+            return f"{range_match.group(1)}-{range_match.group(2)}"
         
-        for pattern in patterns:
-            match = re.search(pattern, text_lower)
-            if match:
-                if len(match.groups()) == 2:  # Range like 2-4
-                    return f"{match.group(1)}-{match.group(2)}"
-                else:  # Single number
-                    return match.group(1)
+        # Pattern 2: Single number with plus "2+ years"
+        plus_match = re.search(r'(\d+)\+\s*(?:years?|yrs?)', text_lower)
+        if plus_match:
+            return f"{plus_match.group(1)}+"
+        
+        # Pattern 3: Exact years "2 years" or "2 yrs"
+        exact_match = re.search(r'(\d+\.?\d*)\s*(?:years?|yrs?)', text_lower)
+        if exact_match:
+            return str(int(float(exact_match.group(1))))
+        
+        # Pattern 4: Just a number followed by year indicator
+        number_match = re.search(r'(\d+)\s*(?:year|yr)', text_lower)
+        if number_match:
+            return number_match.group(1)
         
         # Check for fresher keywords
-        if any(keyword in text_lower for keyword in ['fresher', 'entry level', '0 year', 'no experience']):
+        fresher_keywords = ['fresher', 'entry level', 'entry-level', '0 year', 'no experience', 'new grad', 'recent graduate']
+        if any(keyword in text_lower for keyword in fresher_keywords):
             return "0"
+        
+        # Check for experience level keywords and map to approximate years
+        if 'senior' in text_lower or 'lead' in text_lower:
+            return "5+"
+        elif 'mid-level' in text_lower or 'intermediate' in text_lower:
+            return "3-5"
+        elif 'junior' in text_lower:
+            return "1-2"
         
         return "0"
 
@@ -394,14 +408,19 @@ class AdvancedMLExtractor:
             else:
                 cleaned_data['Job Type'] = self._normalize_job_type(job_type)
         
-        # Clean and validate Experience
+        # ENHANCED: Clean and validate Experience with better extraction
         if cleaned_data.get('Experience') != "Not Specified":
             exp = cleaned_data['Experience']
             # Try to extract actual experience value
             extracted_exp = self._extract_experience_from_text(exp)
             cleaned_data['Experience'] = extracted_exp
         else:
-            cleaned_data['Experience'] = "0"
+            # If no experience found, try to extract from job title (for interns/freshers)
+            title = cleaned_data.get('Job Title', '')
+            if 'intern' in title.lower():
+                cleaned_data['Experience'] = "0"
+            else:
+                cleaned_data['Experience'] = "0"
         
         return cleaned_data
 
@@ -447,9 +466,13 @@ class AdvancedMLExtractor:
                         is_valid = self._is_valid_company(candidate_text)
                     elif field == 'Job Type':
                         is_valid = self._is_valid_job_type(candidate_text)
+                    elif field == 'Experience':
+                        # ENHANCED: Check if text actually contains experience info
+                        exp_extracted = self._extract_experience_from_text(candidate_text)
+                        is_valid = exp_extracted != "0" or any(term in candidate_text.lower() for term in ['fresher', 'entry', 'junior'])
                     
                     # Higher confidence threshold for Company and Job Type
-                    min_confidence = 0.7 if field in ['Company', 'Job Type'] else 0.6
+                    min_confidence = 0.7 if field in ['Company', 'Job Type'] else 0.5 if field == 'Experience' else 0.6
                     
                     if is_valid and score > best_score and score > min_confidence:
                         best_score = score
@@ -567,13 +590,19 @@ def extract_with_requests_enhanced(link, ml_extractor):
     print(f"      All attempts failed for this link")
     return None
 
-def scrape_linkedin_links(query, location, unique_links_lock, unique_links):
-    """Scrape LinkedIn job links"""
+def scrape_linkedin_links(query, location, unique_links_lock, unique_links, max_jobs):
+    """Scrape LinkedIn job links - NOW RESPECTS MAX_JOBS"""
     session = create_requests_session()
     links_found = 0
     
     try:
-        for i in range(2):  # PAGES_TO_SCRAPE
+        for i in range(10):  # Max 10 pages (25 jobs per page = 250 max)
+            # ADDED: Stop if we've reached max_jobs
+            with unique_links_lock:
+                if len(unique_links) >= max_jobs:
+                    print(f"   ✓ Reached max jobs limit ({max_jobs}), stopping")
+                    break
+            
             page_num = i * 25
             formatted_query = quote_plus(query)
             formatted_location = quote_plus(location)
@@ -594,12 +623,14 @@ def scrape_linkedin_links(query, location, unique_links_lock, unique_links):
                         href = link_el.get('href')
                         if href:
                             with unique_links_lock:
+                                if len(unique_links) >= max_jobs:
+                                    break
                                 if href not in unique_links:
                                     unique_links.add(href)
                                     links_found += 1
                                     new_links += 1
                     
-                    print(f"    Page {i+1}: Found {new_links} new links")
+                    print(f"    Page {i+1}: Found {new_links} new links (Total: {len(unique_links)})")
                     
                     if not link_elements:
                         print(f"     No more links found on page {i+1}, stopping")
@@ -624,10 +655,14 @@ def scrape_linkedin_links(query, location, unique_links_lock, unique_links):
     return links_found
 
 def run_scraper_with_config(user_config=None):
-    """Main scraper function"""
+    """Main scraper function - NOW USES MAX_JOBS"""
     start_time = time.time()
     
     config = user_config if user_config else JOB_CONFIG
+    
+    # ADDED: Extract max_jobs from config
+    max_jobs = config.get('max_jobs', 50)
+    
     if user_config and 'job_titles' in user_config and user_config['job_titles']:
         search_queries = user_config['job_titles']
         print(f"Using {len(search_queries)} job titles directly from UI configuration.")
@@ -639,7 +674,7 @@ def run_scraper_with_config(user_config=None):
     print("="*80)
     print(f"Configuration:")
     print(f"   • Queries: {len(search_queries)}")
-    print(f"   • Pages: 2")
+    print(f"   • Max Jobs: {max_jobs}")
     print(f"   • Workers: 3")
     print("="*80)
     
@@ -662,7 +697,7 @@ def run_scraper_with_config(user_config=None):
         for location in config['locations']:
             for query in limited_queries:
                 future = executor.submit(
-                    scrape_linkedin_links, query, location, unique_links_lock, unique_links
+                    scrape_linkedin_links, query, location, unique_links_lock, unique_links, max_jobs
                 )
                 futures.append(future)
         
@@ -671,9 +706,15 @@ def run_scraper_with_config(user_config=None):
             result = future.result()
             completed += 1
             print(f"    Completed {completed}/{len(futures)} - {result} links found")
+            
+            # ADDED: Stop if we've reached max_jobs
+            if len(unique_links) >= max_jobs:
+                print(f"\n    ✓ Reached target of {max_jobs} jobs!")
+                break
     
-    links_to_process = list(unique_links)
-    print(f"\n    Collected {len(links_to_process)} total job links")
+    # ADDED: Limit links to max_jobs
+    links_to_process = list(unique_links)[:max_jobs]
+    print(f"\n    Collected {len(links_to_process)} job links (limit: {max_jobs})")
     
     if not links_to_process:
         print("No links found. LinkedIn might be blocking requests.")
@@ -727,7 +768,7 @@ def run_scraper_with_config(user_config=None):
         
         df = df[required_columns]
         df.to_csv(OUTPUT_FILE, index=False, encoding='utf-8')
-        print(f"    Data saved to {OUTPUT_FILE}")
+        print(f"    ✓ Data saved to {OUTPUT_FILE}")
         
         print("\nEXTRACTION QUALITY REPORT:")
         print("="*80)
@@ -737,13 +778,13 @@ def run_scraper_with_config(user_config=None):
             
             # Color coding for quality
             if percentage >= 80:
-                status = "EXCELLENT"
+                status = "✅ EXCELLENT"
             elif percentage >= 60:
-                status = "GOOD"
+                status = "✓ GOOD"
             elif percentage >= 40:
-                status = "FAIR"
+                status = "⚠️ FAIR"
             else:
-                status = "POOR"
+                status = "❌ POOR"
             
             print(f"  {field:20s}: {found_count:4d}/{len(df):4d} ({percentage:5.1f}%) {status}")
         
@@ -756,27 +797,31 @@ def run_scraper_with_config(user_config=None):
         industries_count = df[df['Job Type'].str.contains('Industries', case=False, na=False)].shape[0]
         
         if similar_searches_count > 0:
-            print(f"  Found {similar_searches_count} 'Similar Searches' in Company field (cleaned)")
+            print(f"  ⚠️ Found {similar_searches_count} 'Similar Searches' in Company field (cleaned)")
         else:
-            print(f"  No 'Similar Searches' found in Company field")
+            print(f"  ✓ No 'Similar Searches' found in Company field")
         
         if industries_count > 0:
-            print(f"   Found {industries_count} 'Industries' in Job Type field (cleaned)")
+            print(f"  ⚠️ Found {industries_count} 'Industries' in Job Type field (cleaned)")
         else:
-            print(f"  No 'Industries' found in Job Type field")
+            print(f"  ✓ No 'Industries' found in Job Type field")
         
         zero_exp_count = df[df['Experience'] == "0"].shape[0]
-        print(f" Jobs with Experience '0': {zero_exp_count}/{len(df)} ({zero_exp_count/len(df)*100:.1f}%)")
+        print(f"  ℹ️ Jobs with Experience '0': {zero_exp_count}/{len(df)} ({zero_exp_count/len(df)*100:.1f}%)")
+        
+        # ADDED: Better experience statistics
+        exp_with_range = df[df['Experience'].str.contains('-', na=False)].shape[0]
+        print(f"  ✓ Jobs with experience range: {exp_with_range}/{len(df)} ({exp_with_range/len(df)*100:.1f}%)")
         
         not_specified_job_type = df[df['Job Type'] == "Not Specified"].shape[0]
-        print(f" Jobs with unspecified type: {not_specified_job_type}/{len(df)} ({not_specified_job_type/len(df)*100:.1f}%)")
+        print(f"  ℹ️ Jobs with unspecified type: {not_specified_job_type}/{len(df)} ({not_specified_job_type/len(df)*100:.1f}%)")
     
     execution_time = (time.time() - start_time) / 60
     print("\n" + "=" * 80)
-    print(f"SCRAPING COMPLETED!")
-    print(f"Time: {execution_time:.2f} minutes")
-    print(f"Jobs: {len(all_jobs)}")
-    print("="*80)
+    print(f"✅ SCRAPING COMPLETED!")
+    print(f"⏱️ Time: {execution_time:.2f} minutes")
+    print(f"📊 Jobs: {len(all_jobs)}")
+    print("=" * 80)
     
     return all_jobs
 
