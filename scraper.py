@@ -3,7 +3,7 @@ import time
 import random
 import pandas as pd
 import numpy as np
-from urllib.parse import urljoin, quote_plus
+from urllib.parse import urljoin, quote_plus, quote
 from bs4 import BeautifulSoup
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
@@ -37,7 +37,7 @@ JOB_CONFIG = {
     'experience_level': 'all',
     'locations': ['India'],
     'job_types': ['full-time', 'internship'],
-    'platforms': ['linkedin'],
+    'platforms': ['linkedin', 'indeed', 'naukri'],
 }
 
 JOB_CATEGORIES = {
@@ -62,15 +62,25 @@ JOB_CATEGORIES = {
 }
 
 def build_search_queries(config):
-    search_queries = []
-    for category, enabled in config['categories'].items():
-        if enabled:
-            search_queries.extend(JOB_CATEGORIES[category])
-    search_queries = list(set(search_queries))
-    print(f"Built {len(search_queries)} search queries")
-    return search_queries
-
-SEARCH_QUERIES = build_search_queries(JOB_CONFIG)
+    """Build better search queries that target specific experience levels"""
+    base_titles = config.get('job_titles', [])
+    experience_keywords = [
+        "",  # No experience filter
+        "senior", "lead", "principal",
+        "mid level", "mid-level", 
+        "junior", "entry level", "fresher",
+        "2 years experience", "3 years experience", "5 years experience"
+    ]
+    
+    enhanced_queries = []
+    for title in base_titles:
+        for exp_keyword in experience_keywords:
+            if exp_keyword:
+                enhanced_queries.append(f"{title} {exp_keyword}")
+            else:
+                enhanced_queries.append(title)
+    
+    return list(set(enhanced_queries))  # Remove duplicates
 
 class AdvancedMLExtractor:
     def __init__(self, models_dir):
@@ -83,14 +93,16 @@ class AdvancedMLExtractor:
             'email', 'similar searches', 'industries', 'job', 'posted', 'open jobs',
             'show more', 'show less', 'see more', 'see less', 'load more', 'view all',
             'companies', 'locations', 'salaries', 'profiles', 'about', 'follow',
-            'connect', 'message', 'sponsored', 'promoted', 'featured'
+            'connect', 'message', 'sponsored', 'promoted', 'featured', 'upload resume',
+            'create alert', 'job alert', 'email me', 'get notified'
         ]
         
         # Company blacklist - common false positives
         self.company_blacklist = [
             'similar searches', 'industries', 'linkedin', 'indeed', 'naukri',
             'job title', 'location', 'experience', 'posted date', 'job type',
-            'companies', 'show more', 'see all', 'open jobs', 'job search'
+            'companies', 'show more', 'see all', 'open jobs', 'job search',
+            'upload resume', 'create alert', 'get notified'
         ]
         
         # Job type blacklist
@@ -244,7 +256,7 @@ class AdvancedMLExtractor:
             'full-time', 'full time', 'fulltime', 
             'part-time', 'part time', 'parttime',
             'internship', 'intern', 'contract', 'temporary', 'freelance',
-            'remote', 'hybrid', 'onsite', 'on-site'
+            'remote', 'hybrid', 'onsite', 'on-site', 'permanent'
         ]
         
         # Check if text contains any valid job type
@@ -316,84 +328,166 @@ class AdvancedMLExtractor:
         return unique_candidates
 
     def _extract_experience_from_text_enhanced(self, text):
-        """ENHANCED: Extract experience years from text with better patterns"""
-        if not text or not isinstance(text, str):
+        """Enhanced experience extraction with more patterns"""
+        if not text:
             return "0"
         
-        text_lower = text.lower().strip()
+        text_lower = text.lower()
         
-        # Remove common noise words that might confuse the extraction
-        noise_words = ['similar search', 'industries', 'companies', 'show more', 'see all']
-        for noise in noise_words:
-            text_lower = text_lower.replace(noise, '')
-        
-        # Pattern 1: Range format "2-4 years" or "2 - 4 years" or "2 to 4 years"
-        range_patterns = [
-            r'(\d+)\s*[-–—]\s*(\d+)\s*(?:years?|yrs?)',
-            r'(\d+)\s*to\s*(\d+)\s*(?:years?|yrs?)',
-            r'(\d+)\s*-\s*(\d+)\s*(?:years?|yrs?)'
+        # Expanded patterns for better matching
+        patterns = [
+            # Range patterns: 2-4 years, 2 to 4 years, 2 - 4 years
+            (r'(\d+)\s*[-–—to]+\s*(\d+)\s*(?:years?|yrs?|y)', lambda m: f"{m.group(1)}-{m.group(2)}"),
+            # Plus patterns: 5+ years, 3+ yrs
+            (r'(\d+)\s*\+\s*(?:years?|yrs?|y)', lambda m: f"{m.group(1)}+"),
+            # Minimum patterns: min 3 years, minimum 2 years
+            (r'(?:min|minimum)\s+(\d+)\s*(?:years?|yrs?|y)', lambda m: f"{m.group(1)}+"),
+            # Exact years: 3 years, 5 yrs
+            (r'(\d+)\s*(?:years?|yrs?|y)(?:\s+experience)?', lambda m: m.group(1)),
+            # Senior/lead positions (typically 5+ years)
+            (r'\b(senior|lead|principal|sr\.)\b', lambda m: "5+"),
+            # Mid-level positions (typically 3-5 years)
+            (r'\b(mid[-]?level|mid[-]?senior)\b', lambda m: "3-5"),
+            # Junior/entry level (typically 0-2 years)
+            (r'\b(junior|jr\.|entry[-]?level)\b', lambda m: "0-2"),
+            # Fresher/graduate (0 years)
+            (r'\b(fresher|fresh|graduate|recent graduate|no experience|0\s*years?)\b', lambda m: "0"),
         ]
         
-        for pattern in range_patterns:
-            range_match = re.search(pattern, text_lower)
-            if range_match:
-                min_years = int(range_match.group(1))
-                max_years = int(range_match.group(2))
-                return f"{min_years}-{max_years}"
+        # Try all patterns
+        for pattern, handler in patterns:
+            matches = re.finditer(pattern, text_lower)
+            for match in matches:
+                try:
+                    result = handler(match)
+                    if result:
+                        return result
+                except:
+                    continue
         
-        # Pattern 2: Single number with plus "2+ years" or "2 + years"
-        plus_match = re.search(r'(\d+)\s*\+\s*(?:years?|yrs?)', text_lower)
-        if plus_match:
-            return f"{plus_match.group(1)}+"
-        
-        # Pattern 3: Exact years "2 years" or "2 yrs" or "2 year"
-        exact_match = re.search(r'(\d+\.?\d*)\s*(?:years?|yrs?)', text_lower)
-        if exact_match:
-            years = exact_match.group(1)
-            # Convert decimal to whole number if needed
-            if '.' in years:
-                years = str(int(float(years)))
-            return years
-        
-        # Pattern 4: Just numbers that likely represent years
-        # Look for numbers in context of experience keywords
-        if any(keyword in text_lower for keyword in ['year', 'yr', 'experience', 'exp']):
-            number_matches = re.findall(r'\b(\d+)\b', text_lower)
-            if number_matches:
-                # Take the first number found in experience context
-                for num in number_matches:
-                    num_int = int(num)
-                    if 0 <= num_int <= 50:  # Reasonable experience range
-                        return str(num_int)
-        
-        # Enhanced fresher detection
-        fresher_keywords = [
-            'fresher', 'entry level', 'entry-level', '0 year', 'no experience', 
-            'new grad', 'recent graduate', 'fresh graduate', 'campus hire',
-            'student', 'trainee', 'beginner'
-        ]
-        if any(keyword in text_lower for keyword in fresher_keywords):
-            return "0"
-        
-        # Enhanced experience level mapping
-        level_keywords = {
-            'senior': "5+",
-            'lead': "5+", 
-            'principal': "8+",
-            'architect': "6+",
-            'mid-level': "3-5",
-            'mid level': "3-5",
-            'intermediate': "2-4",
-            'junior': "1-2",
-            'associate': "1-2",
-            'entry': "0-1"
-        }
-        
-        for keyword, exp_range in level_keywords.items():
-            if keyword in text_lower:
-                return exp_range
+        # Fallback: Look for any numbers that might indicate experience
+        number_matches = re.findall(r'\b(\d+)\s*(?=years?|yrs?|y\b)', text_lower)
+        if number_matches:
+            return number_matches[0]
         
         return "0"
+
+    def _extract_experience_from_description(self, html_content):
+        """Extract experience from job description/requirements with enhanced patterns"""
+        soup = BeautifulSoup(html_content, 'html.parser')
+        
+        # Look for description sections - common selectors for job descriptions
+        description_selectors = [
+            '.description', '.job-description', '.description__text',
+            '.jobs-description', '.job-details', '.description-content',
+            '[data-testid="description"]', '.description__container',
+            'div[class*="description"]', 'div[class*="Description"]',
+            'section[class*="description"]', '.jobs-box__html-content',
+            # LinkedIn specific
+            '.description__text--rich', '.show-more-less-html__markup',
+            # Indeed specific  
+            '.jobsearch-JobComponent-description', '#jobDescriptionText',
+            # Naukri specific
+            '.dang-inner-html', '.job-desc'
+        ]
+        
+        description_text = ""
+        
+        # Try to find description using multiple selectors
+        for selector in description_selectors:
+            elements = soup.select(selector)
+            for element in elements:
+                text = element.get_text(strip=True)
+                if len(text) > 200:  # Likely a real description
+                    description_text = text
+                    break
+            if description_text:
+                break
+        
+        # If no description found with selectors, get all text and find the largest block
+        if not description_text:
+            all_text = soup.get_text()
+            # Split by lines and find the largest text block (likely description)
+            lines = [line.strip() for line in all_text.split('\n') if line.strip()]
+            if lines:
+                # Find the longest continuous text block
+                description_text = max(lines, key=len)
+        
+        if not description_text:
+            return "0"
+        
+        # Enhanced experience patterns for descriptions
+        text_lower = description_text.lower()
+        
+        # More comprehensive patterns for description text
+        patterns = [
+            # Range patterns with various formats
+            (r'(\d+)\s*[-–—to]+\s*(\d+)\s*(?:years?|yrs?|y)\s*(?:of)?\s*(?:experience|exp)', 
+             lambda m: f"{m.group(1)}-{m.group(2)}"),
+            (r'(\d+)\s*-\s*(\d+)\s*(?:years?|yrs?|y)\s*(?:of)?\s*(?:experience|exp)', 
+             lambda m: f"{m.group(1)}-{m.group(2)}"),
+            
+            # Plus patterns
+            (r'(\d+)\s*\+\s*(?:years?|yrs?|y)\s*(?:of)?\s*(?:experience|exp)', 
+             lambda m: f"{m.group(1)}+"),
+            
+            # Minimum/at least patterns
+            (r'(?:min|minimum|at least|atleast)\s+(\d+)\s*(?:years?|yrs?|y)\s*(?:of)?\s*(?:experience|exp)', 
+             lambda m: f"{m.group(1)}+"),
+            
+            # Exact years with context
+            (r'(\d+)\s*(?:years?|yrs?|y)\s*(?:of)?\s*(?:experience|exp)', 
+             lambda m: m.group(1)),
+            
+            # Seniority-based extraction
+            (r'\b(senior|sr\.|lead|principal|staff)\s+(?:.*?\s+)?(?:engineer|developer|analyst|scientist)\b', 
+             lambda m: "5+"),
+            (r'\b(mid[-]?level|mid[-]?senior|experienced)\b', 
+             lambda m: "3-5"),
+            (r'\b(junior|jr\.|entry[-]?level|associate)\b', 
+             lambda m: "0-2"),
+            (r'\b(fresher|fresh|graduate|recent graduate|no experience|0\s*years?)\b', 
+             lambda m: "0"),
+            
+            # Industry standard ranges
+            (r'\b(one|two|three|four|five|six|seven|eight|nine|ten)\+?\s+(?:years?|yrs?)\b', 
+             lambda m: self._word_to_number(m.group(1))),
+        ]
+        
+        # Try all patterns
+        for pattern, handler in patterns:
+            matches = re.finditer(pattern, text_lower)
+            for match in matches:
+                try:
+                    result = handler(match)
+                    if result and result != "0":  # Only return if we found something meaningful
+                        print(f"        📝 Found experience in description: '{match.group()}' -> '{result}'")
+                        return result
+                except:
+                    continue
+        
+        # Fallback: Look for any number that's likely experience
+        number_patterns = [
+            r'\b(\d+)\s*[-–—to]+\s*\d+\s*(?:years?|yrs?|y)',
+            r'\b(\d+)\s*\+\s*(?:years?|yrs?|y)',
+            r'\b(\d+)\s*(?:years?|yrs?|y)\s*(?:of)?\s*experience'
+        ]
+        
+        for pattern in number_patterns:
+            matches = re.findall(pattern, text_lower)
+            if matches:
+                print(f"        📝 Found experience number: {matches[0]}")
+                return matches[0]
+        
+        return "0"
+
+    def _word_to_number(self, word):
+        """Convert word numbers to digits"""
+        word_map = {
+            'one': '1', 'two': '2', 'three': '3', 'four': '4', 'five': '5',
+            'six': '6', 'seven': '7', 'eight': '8', 'nine': '9', 'ten': '10'
+        }
+        return word_map.get(word.lower(), "0")
 
     def _normalize_job_type(self, text):
         """Normalize job type to standard values"""
@@ -468,20 +562,16 @@ class AdvancedMLExtractor:
             else:
                 cleaned_data['Job Type'] = self._normalize_job_type(job_type)
         
-        # ENHANCED: Experience extraction with the new method
-        if cleaned_data.get('Experience') != "Not Specified":
-            exp_text = cleaned_data['Experience']
-            extracted_exp = self._extract_experience_from_text_enhanced(exp_text)
-            cleaned_data['Experience'] = extracted_exp
-            print(f"        Experience extracted: '{exp_text}' -> '{extracted_exp}'")
-        else:
-            # If no experience field found, try to extract from all candidates
-            cleaned_data['Experience'] = "0"
+        # ENHANCED: Experience is already extracted from description, just validate
+        exp_value = cleaned_data.get('Experience', '0')
+        if exp_value == "0":
+            # If we got 0 from description, check if we should mark as "Not Specified" instead
+            cleaned_data['Experience'] = "0"  # Keep as 0 for now
         
         return cleaned_data
 
     def predict(self, html_content):
-        """Main prediction method with enhanced experience extraction"""
+        """Main prediction method with enhanced experience extraction from description"""
         soup = BeautifulSoup(html_content, 'html.parser')
         candidates = self._get_quality_candidates(soup)
         
@@ -497,9 +587,10 @@ class AdvancedMLExtractor:
         confidence_scores = {field: 0.0 for field in self.fields}
         used_indices = set()
         
-        # Extract fields with validation - EXPERIENCE FIRST for better accuracy
-        field_priority = ['Experience', 'Job Title', 'Company', 'Location', 'Job Type', 'Posted Date']
-        
+        # Extract basic fields first
+        # Extract basic fields first - ONE FIELD AT A TIME
+        field_priority = ['Job Title', 'Company', 'Location', 'Job Type', 'Posted Date']
+
         for field in field_priority:
             pipeline = self.pipelines.get(field)
             if not pipeline:
@@ -515,7 +606,9 @@ class AdvancedMLExtractor:
                 # Find best candidate with field-specific validation
                 best_score = 0
                 best_idx = -1
+                best_candidates = []
                 
+                # First, collect all valid candidates for this field
                 for idx, score in enumerate(probabilities):
                     if idx in used_indices:
                         continue
@@ -528,40 +621,64 @@ class AdvancedMLExtractor:
                         is_valid = self._is_valid_company(candidate_text)
                     elif field == 'Job Type':
                         is_valid = self._is_valid_job_type(candidate_text)
-                    elif field == 'Experience':
-                        # ENHANCED: Use the new validation
-                        is_valid = self._is_valid_experience_text(candidate_text)
+                    elif field == 'Location':
+                        # Basic location validation
+                        is_valid = len(candidate_text) > 2 and ',' in candidate_text
+                    elif field == 'Job Title':
+                        # Basic title validation - should not be too long
+                        is_valid = 2 <= len(candidate_text) <= 100
                     
-                    # Adjusted confidence thresholds
-                    min_confidence = 0.6 if field == 'Experience' else 0.7 if field in ['Company', 'Job Type'] else 0.5
+                    min_confidence = 0.7 if field in ['Company', 'Job Type'] else 0.6
                     
-                    if is_valid and score > best_score and score > min_confidence:
-                        best_score = score
-                        best_idx = idx
+                    if is_valid and score >= min_confidence:
+                        best_candidates.append((idx, score, candidate_text))
                 
-                if best_idx != -1:
-                    extracted_data[field] = candidates_df.loc[best_idx, 'text']
+                # Now select the BEST candidate (highest score) for this field
+                if best_candidates:
+                    # Sort by confidence score descending
+                    best_candidates.sort(key=lambda x: x[1], reverse=True)
+                    best_idx, best_score, best_text = best_candidates[0]
+                    
+                    # Additional validation to ensure we pick the most appropriate one
+                    if field == 'Job Title':
+                        # For job titles, prefer shorter, more specific titles
+                        filtered_titles = [cand for cand in best_candidates if len(cand[2]) <= 80]
+                        if filtered_titles:
+                            best_idx, best_score, best_text = filtered_titles[0]
+                    
+                    extracted_data[field] = best_text
                     confidence_scores[field] = best_score
                     used_indices.add(best_idx)
                     print(f"        {field}: {extracted_data[field][:50]}... (confidence: {best_score:.3f})")
+                    
+                    # Debug: Show why we rejected others
+                    if len(best_candidates) > 1:
+                        print(f"          ⚡ Rejected {len(best_candidates)-1} other candidates for {field}")
                 else:
-                    print(f"        {field}: No valid candidate found")
+                    print(f"        {field}: No valid candidate found (tried {len(probabilities)} candidates)")
                     
             except Exception as e:
                 print(f"        [!] Error predicting {field}: {e}")
                 continue
         
-        # Enhanced post-processing with better experience extraction
+        # ENHANCED: Extract experience from description (most important)
+        print("        🔍 Searching for experience in description...")
+        experience_from_description = self._extract_experience_from_description(html_content)
+        extracted_data['Experience'] = experience_from_description
+        
+        # Enhanced post-processing
         cleaned_data = self._post_process_extracted_data_enhanced(extracted_data)
         
         # Final experience fallback - check job title for experience hints
         if cleaned_data.get('Experience') in ["0", "Not Specified"]:
             title = cleaned_data.get('Job Title', '').lower()
-            if 'intern' in title or 'fresher' in title:
+            if any(word in title for word in ['intern', 'fresher', 'trainee', 'graduate']):
                 cleaned_data['Experience'] = "0"
-            elif 'senior' in title or 'lead' in title:
+            elif any(word in title for word in ['senior', 'lead', 'principal', 'staff', 'sr.']):
                 cleaned_data['Experience'] = "5+"
-            elif 'junior' in title:
+            elif any(word in title for word in ['mid-level', 'midlevel', 'experienced']):
+                cleaned_data['Experience'] = "3-5"
+            elif any(word in title for word in ['junior', 'jr.', 'entry', 'associate']):
                 cleaned_data['Experience'] = "1-2"
         
         cleaned_data['ML_Confidence_Avg'] = np.mean(list(confidence_scores.values())) if confidence_scores else 0
@@ -632,7 +749,7 @@ def extract_with_requests_enhanced(link, ml_extractor):
                 continue
                 
             elif response.status_code == 403:
-                print(f"      Access forbidden - LinkedIn blocking")
+                print(f"      Access forbidden - Site blocking")
                 return None
                 
             else:
@@ -654,140 +771,302 @@ def extract_with_requests_enhanced(link, ml_extractor):
     print(f"      All attempts failed for this link")
     return None
 
-def scrape_linkedin_links(query, location, unique_links_lock, unique_links, max_jobs):
-    """Scrape LinkedIn job links - NOW RESPECTS MAX_JOBS"""
-    session = create_requests_session()
-    links_found = 0
+def scrape_linkedin_links(query, location, unique_links_lock, unique_links):
+    """Enhanced LinkedIn scraping with better headers and rotation"""
+    
+    # Enhanced headers to look more like a real browser
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Accept-Encoding': 'gzip, deflate, br',
+        'DNT': '1',
+        'Connection': 'keep-alive',
+        'Upgrade-Insecure-Requests': '1',
+        'Sec-Fetch-Dest': 'document',
+        'Sec-Fetch-Mode': 'navigate',
+        'Sec-Fetch-Site': 'none',
+        'Sec-Fetch-User': '?1',
+        'Cache-Control': 'max-age=0',
+    }
     
     try:
-        for i in range(10):  # Max 10 pages (25 jobs per page = 250 max)
-            # ADDED: Stop if we've reached max_jobs
-            with unique_links_lock:
-                if len(unique_links) >= max_jobs:
-                    print(f"   ✓ Reached max jobs limit ({max_jobs}), stopping")
-                    break
-            
-            page_num = i * 25
-            formatted_query = quote_plus(query)
-            formatted_location = quote_plus(location)
-            
-            search_url = f"https://www.linkedin.com/jobs-guest/jobs/api/seeMoreJobPostings/search?keywords={formatted_query}&location={formatted_location}&start={page_num}"
-            
-            print(f"   LinkedIn: '{query}' in {location} - page {i+1}")
-            
+        # Encode search parameters
+        search_query = f"{query} {location}"
+        encoded_query = quote(search_query)
+        
+        # Multiple LinkedIn search URL patterns
+        search_urls = [
+            f"https://www.linkedin.com/jobs/search/?keywords={encoded_query}",
+            f"https://www.linkedin.com/jobs/search/?keywords={quote(query)}&location={quote(location)}",
+        ]
+        
+        links_found = 0
+        
+        for search_url in search_urls:
             try:
-                response = session.get(search_url, timeout=25)
+                print(f"      Searching: {query} in {location}")
                 
-                if response.status_code == 200:
-                    soup = BeautifulSoup(response.text, "html.parser")
-                    link_elements = soup.select('a.base-card__full-link')
-                    
-                    new_links = 0
-                    for link_el in link_elements:
-                        href = link_el.get('href')
-                        if href:
+                response = requests.get(
+                    search_url, 
+                    headers=headers,
+                    timeout=30,
+                    allow_redirects=True
+                )
+                
+                if response.status_code != 200:
+                    print(f"      ❌ LinkedIn returned status {response.status_code}")
+                    continue
+                
+                # Parse the page for job links
+                soup = BeautifulSoup(response.content, 'html.parser')
+                
+                # Multiple possible selectors for LinkedIn job links
+                link_selectors = [
+                    'a[href*="/jobs/view/"]',
+                    'a[data-tracking-control-name*="public_jobs"]',
+                    '.job-search-card',
+                    '.jobs-search-results__list-item',
+                ]
+                
+                for selector in link_selectors:
+                    job_cards = soup.select(selector)
+                    for card in job_cards:
+                        link = card.get('href')
+                        if link and '/jobs/view/' in link:
+                            full_link = link if link.startswith('http') else f"https://www.linkedin.com{link}"
+                            
                             with unique_links_lock:
-                                if len(unique_links) >= max_jobs:
-                                    break
-                                if href not in unique_links:
-                                    unique_links.add(href)
+                                if full_link not in unique_links:
+                                    unique_links.add(full_link)
                                     links_found += 1
-                                    new_links += 1
-                    
-                    print(f"    Page {i+1}: Found {new_links} new links (Total: {len(unique_links)})")
-                    
-                    if not link_elements:
-                        print(f"     No more links found on page {i+1}, stopping")
-                        break
-                        
-                elif response.status_code == 429:
-                    print(f"    Rate limited, stopping this query")
-                    break
-                    
-                else:
-                    print(f"    HTTP {response.status_code} on page {i+1}")
+                
+                # Also look for job IDs in data attributes
+                job_elements = soup.find_all(attrs={"data-job-id": True})
+                for element in job_elements:
+                    job_id = element.get('data-job-id')
+                    if job_id:
+                        job_link = f"https://www.linkedin.com/jobs/view/{job_id}"
+                        with unique_links_lock:
+                            if job_link not in unique_links:
+                                unique_links.add(job_link)
+                                links_found += 1
+                
+                if links_found > 0:
+                    break  # Found links, no need to try other URLs
                     
             except Exception as e:
-                print(f"    Error on page {i+1}: {str(e)[:50]}")
+                print(f"      ⚠️ Error with URL {search_url}: {e}")
                 continue
+        
+        # Random delay between requests to avoid blocking
+        time.sleep(random.uniform(2, 5))
+        
+        return links_found
+        
+    except Exception as e:
+        print(f"      ❌ Failed to scrape LinkedIn for {query} in {location}: {e}")
+        return 0
+
+
+def scrape_indeed_links(query, location, unique_links_lock, unique_links):
+    """Scrape job links from Indeed"""
+    try:
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        }
+        
+        base_url = "https://in.indeed.com/jobs"
+        params = {
+            'q': query,
+            'l': location,
+            'sort': 'date'
+        }
+        
+        response = requests.get(base_url, params=params, headers=headers, timeout=30)
+        if response.status_code == 200:
+            soup = BeautifulSoup(response.content, 'html.parser')
             
-            time.sleep(random.uniform(3, 7))
+            # Indeed job link selectors
+            selectors = [
+                'a[data-jk]',
+                '.jobtitle a',
+                'a[class*="jobTitle"]'
+            ]
+            
+            links_found = 0
+            for selector in selectors:
+                links = soup.select(selector)
+                for link in links:
+                    href = link.get('href')
+                    if href and 'jk=' in href:
+                        full_url = f"https://in.indeed.com{href}" if href.startswith('/') else href
+                        with unique_links_lock:
+                            if full_url not in unique_links:
+                                unique_links.add(full_url)
+                                links_found += 1
+            
+            time.sleep(random.uniform(1, 3))
+            return links_found
             
     except Exception as e:
-        print(f"Fatal error scraping LinkedIn for '{query}': {e}")
-    
-    return links_found
+        print(f"      ❌ Indeed scraping failed: {e}")
+        return 0
 
+def scrape_naukri_links(query, location, unique_links_lock, unique_links):
+    """Scrape job links from Naukri.com"""
+    try:
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        }
+        
+        base_url = "https://www.naukri.com/jobs"
+        params = {
+            'k': query,
+            'l': location
+        }
+        
+        response = requests.get(base_url, params=params, headers=headers, timeout=30)
+        if response.status_code == 200:
+            soup = BeautifulSoup(response.content, 'html.parser')
+            
+            links_found = 0
+            links = soup.find_all('a', href=True)
+            for link in links:
+                href = link['href']
+                if '/job/' in href and 'naukri.com' in href:
+                    with unique_links_lock:
+                        if href not in unique_links:
+                            unique_links.add(href)
+                            links_found += 1
+            
+            time.sleep(random.uniform(1, 3))
+            return links_found
+            
+    except Exception as e:
+        print(f"      ❌ Naukri scraping failed: {e}")
+        return 0
+    
 def run_scraper_with_config(user_config=None):
-    """Main scraper function - NOW USES MAX_JOBS"""
+    """Main scraper function with multiple sources - FIXED FOR UI"""
     start_time = time.time()
     
     config = user_config if user_config else JOB_CONFIG
     
-    # ADDED: Extract max_jobs from config
-    max_jobs = config.get('max_jobs', 50)
-    
-    if user_config and 'job_titles' in user_config and user_config['job_titles']:
-        search_queries = user_config['job_titles']
-        print(f"Using {len(search_queries)} job titles directly from UI configuration.")
+    # Handle UI config vs default config structure
+    if 'job_titles' in config:
+        # This is from UI - use job_titles directly
+        search_queries = config['job_titles']
+        print(f"Using {len(search_queries)} job titles from UI configuration")
     else:
-        search_queries = build_search_queries(config)
-
+        # This is default config - build from categories
+        search_queries = []
+        for category, enabled in config.get('categories', {}).items():
+            if enabled and category in JOB_CATEGORIES:
+                search_queries.extend(JOB_CATEGORIES[category])
+        search_queries = list(set(search_queries))
+    
+    # Get scraping intensity from UI or use default
+    scraping_intensity = config.get('scraping_intensity', 'balanced')
+    
+    # Determine limits based on intensity
+    if scraping_intensity == 'light':
+        max_queries = min(10, len(search_queries))
+        max_locations = min(3, len(config['locations']))
+        max_workers = 2
+    elif scraping_intensity == 'comprehensive':
+        max_queries = len(search_queries)  # ALL queries
+        max_locations = len(config['locations'])  # ALL locations
+        max_workers = 4
+    else:  # balanced (default)
+        max_queries = min(20, len(search_queries))
+        max_locations = min(5, len(config['locations']))
+        max_workers = 3
+    
+    # Apply limits
+    queries_to_process = search_queries[:max_queries]
+    locations_to_process = config['locations'][:max_locations]
+    
     print("="*80)
-    print(f"ENHANCED JOB SCRAPER")
+    print(f"ENHANCED JOB SCRAPER - {scraping_intensity.upper()} MODE")
     print("="*80)
     print(f"Configuration:")
-    print(f"   • Queries: {len(search_queries)}")
-    print(f"   • Max Jobs: {max_jobs}")
-    print(f"   • Workers: 3")
+    print(f"   • Queries: {len(queries_to_process)}/{len(search_queries)}")
+    print(f"   • Locations: {len(locations_to_process)}/{len(config['locations'])}")
+    print(f"   • Workers: {max_workers}")
+    print(f"   • Platforms: {config.get('platforms', ['linkedin'])}")
     print("="*80)
     
     try:
         ml_extractor = AdvancedMLExtractor(models_dir=MODELS_DIR)
     except RuntimeError as e:
         print(f"[FATAL ERROR] {e}")
-        return
+        return []
 
-    print("\n[1/3] Collecting job links from LinkedIn...")
+    print("\n[1/3] Collecting job links from multiple sources...")
     unique_links = set()
     unique_links_lock = Lock()
     
-    limited_queries = search_queries[:10]
-    print(f"🔧 Processing {len(limited_queries)} queries")
+    print(f"🔧 Processing {len(queries_to_process)} queries across {len(locations_to_process)} locations")
     
-    with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
+    # Get platforms from config - ensure it's a list
+    platforms = config.get('platforms', ['linkedin'])
+    if isinstance(platforms, str):
+        platforms = [platforms]  # Convert string to list if needed
+        
+    print(f"🔄 Scraping from platforms: {', '.join(platforms)}")
+
+    # Scrape from selected sources only
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = []
         
-        for location in config['locations']:
-            for query in limited_queries:
-                future = executor.submit(
-                    scrape_linkedin_links, query, location, unique_links_lock, unique_links, max_jobs
-                )
-                futures.append(future)
+        for location in locations_to_process:
+            for query in queries_to_process:
+                for platform in platforms:
+                    if platform == 'linkedin':
+                        print(f"      🔍 LinkedIn: {query} in {location}")
+                        future = executor.submit(
+                            scrape_linkedin_links, query, location, unique_links_lock, unique_links
+                        )
+                        futures.append(future)
+                        
+                    elif platform == 'indeed':
+                        print(f"      🔍 Indeed: {query} in {location}")
+                        future = executor.submit(
+                            scrape_indeed_links, query, location, unique_links_lock, unique_links
+                        )
+                        futures.append(future)
+                        
+                    elif platform == 'naukri':
+                        print(f"      🔍 Naukri: {query} in {location}")
+                        future = executor.submit(
+                            scrape_naukri_links, query, location, unique_links_lock, unique_links
+                        )
+                        futures.append(future)
+                    
+                    else:
+                        print(f"      ⚠️ Unknown platform: {platform}")
         
         completed = 0
+        total_futures = len(futures)
         for future in concurrent.futures.as_completed(futures):
             result = future.result()
             completed += 1
-            print(f"    Completed {completed}/{len(futures)} - {result} links found")
-            
-            # ADDED: Stop if we've reached max_jobs
-            if len(unique_links) >= max_jobs:
-                print(f"\n    ✓ Reached target of {max_jobs} jobs!")
-                break
+            progress = (completed / total_futures) * 100
+            print(f"    Progress: {completed}/{total_futures} ({progress:.1f}%) - {result} links found")
     
-    # ADDED: Limit links to max_jobs
-    links_to_process = list(unique_links)[:max_jobs]
-    print(f"\n    Collected {len(links_to_process)} job links (limit: {max_jobs})")
+    links_to_process = list(unique_links)
+    print(f"\n    ✅ Collected {len(links_to_process)} job links from all sources")
     
     if not links_to_process:
-        print("No links found. LinkedIn might be blocking requests.")
-        return
+        print("❌ No links found. Job sites might be blocking requests.")
+        return []
     
-    print(f"\n[2/3] Extracting job details...")
+    print(f"\n[2/3] Extracting job details from {len(links_to_process)} links...")
     all_jobs = []
     
-    batch_size = 50
+    # Process in smaller batches to avoid overwhelming servers
+    batch_size = 20
     batches = [links_to_process[i:i + batch_size] for i in range(0, len(links_to_process), batch_size)]
     
     for batch_num, batch in enumerate(batches):
@@ -803,23 +1082,26 @@ def run_scraper_with_config(user_config=None):
             for i, future in enumerate(concurrent.futures.as_completed(future_to_link)):
                 result = future.result()
                 if result:
-                    result['Source Site'] = 'linkedin'
+                    result['Source Site'] = 'multiple'
                     batch_jobs.append(result)
                     print(f"      {i+1}/{len(batch)} - Success")
                 else:
                     print(f"      {i+1}/{len(batch)} - Failed")
             
             all_jobs.extend(batch_jobs)
-            print(f"    Batch {batch_num + 1}: {len(batch_jobs)}/{len(batch)} successful")
+            print(f"    ✅ Batch {batch_num + 1}: {len(batch_jobs)}/{len(batch)} successful")
         
+        # Delay between batches to be respectful to servers
         if batch_num < len(batches) - 1:
-            delay = random.uniform(10, 20)
-            print(f"    Waiting {delay:.1f}s before next batch...")
+            delay = random.uniform(5, 10)
+            print(f"    ⏳ Waiting {delay:.1f}s before next batch...")
             time.sleep(delay)
     
     print(f"\n[3/3] Saving {len(all_jobs)} jobs...")
     if all_jobs:
         df = pd.DataFrame(all_jobs)
+        
+        # Ensure all required columns exist
         required_columns = ['Job Title', 'Company', 'Location', 'Job Type', 'Experience', 'Posted Date', 'Job Link', 'Source Site']
         for col in required_columns:
             if col not in df.columns:
@@ -832,13 +1114,16 @@ def run_scraper_with_config(user_config=None):
         
         df = df[required_columns]
         df.to_csv(OUTPUT_FILE, index=False, encoding='utf-8')
-        print(f"    ✓ Data saved to {OUTPUT_FILE}")
+        print(f"    ✅ Data saved to {OUTPUT_FILE}")
         
+        # Generate quality report directly in main function
+        total_jobs = len(all_jobs)
         print("\nEXTRACTION QUALITY REPORT:")
         print("="*80)
+        
         for field in ['Job Title', 'Company', 'Location', 'Job Type', 'Experience', 'Posted Date']:
             found_count = df[df[field] != "Not Specified"][field].count()
-            percentage = (found_count/len(df)*100) if len(df) > 0 else 0
+            percentage = (found_count/total_jobs*100) if total_jobs > 0 else 0
             
             # Color coding for quality
             if percentage >= 80:
@@ -850,47 +1135,29 @@ def run_scraper_with_config(user_config=None):
             else:
                 status = "❌ POOR"
             
-            print(f"  {field:20s}: {found_count:4d}/{len(df):4d} ({percentage:5.1f}%) {status}")
+            print(f"  {field:20s}: {found_count:4d}/{total_jobs:4d} ({percentage:5.1f}%) {status}")
         
-        # Additional quality checks
+        # Enhanced experience statistics (with regex fix)
         print("\nDATA QUALITY CHECKS:")
         print("="*80)
         
-        # Check for common issues
-        similar_searches_count = df[df['Company'].str.contains('Similar Search', case=False, na=False)].shape[0]
-        industries_count = df[df['Job Type'].str.contains('Industries', case=False, na=False)].shape[0]
-        
-        if similar_searches_count > 0:
-            print(f"  ⚠️ Found {similar_searches_count} 'Similar Searches' in Company field (cleaned)")
-        else:
-            print(f"  ✓ No 'Similar Searches' found in Company field")
-        
-        if industries_count > 0:
-            print(f"  ⚠️ Found {industries_count} 'Industries' in Job Type field (cleaned)")
-        else:
-            print(f"  ✓ No 'Industries' found in Job Type field")
-        
-        # Enhanced experience statistics
         zero_exp_count = df[df['Experience'] == "0"].shape[0]
-        exp_with_range = df[df['Experience'].str.contains('-', na=False)].shape[0]
-        exp_with_plus = df[df['Experience'].str.contains('+', na=False)].shape[0]
-        valid_exp_count = len(df) - zero_exp_count
+        exp_with_range = df[df['Experience'].str.contains('-', na=False, regex=False)].shape[0]
+        exp_with_plus = df[df['Experience'].str.contains('+', na=False, regex=False)].shape[0]
+        valid_exp_count = total_jobs - zero_exp_count
         
         print(f"  📊 Experience Statistics:")
-        print(f"     • Jobs with valid experience: {valid_exp_count}/{len(df)} ({valid_exp_count/len(df)*100:.1f}%)")
-        print(f"     • Jobs with experience range: {exp_with_range}/{len(df)} ({exp_with_range/len(df)*100:.1f}%)")
-        print(f"     • Jobs with 'X+ years': {exp_with_plus}/{len(df)} ({exp_with_plus/len(df)*100:.1f}%)")
-        print(f"     • Jobs marked as fresher (0): {zero_exp_count}/{len(df)} ({zero_exp_count/len(df)*100:.1f}%)")
+        print(f"     • Jobs with valid experience: {valid_exp_count}/{total_jobs} ({valid_exp_count/total_jobs*100:.1f}%)")
+        print(f"     • Jobs with experience range: {exp_with_range}/{total_jobs} ({exp_with_range/total_jobs*100:.1f}%)")
+        print(f"     • Jobs with 'X+ years': {exp_with_plus}/{total_jobs} ({exp_with_plus/total_jobs*100:.1f}%)")
+        print(f"     • Jobs marked as fresher (0): {zero_exp_count}/{total_jobs} ({zero_exp_count/total_jobs*100:.1f}%)")
         
         # Experience value distribution
         print(f"\n  📈 Experience Value Distribution:")
         exp_counts = df['Experience'].value_counts().head(10)
         for exp, count in exp_counts.items():
-            percentage = (count/len(df)*100)
-            print(f"     • {exp:8s}: {count:3d} jobs ({percentage:5.1f}%)")
-        
-        not_specified_job_type = df[df['Job Type'] == "Not Specified"].shape[0]
-        print(f"\n  ℹ️ Jobs with unspecified type: {not_specified_job_type}/{len(df)} ({not_specified_job_type/len(df)*100:.1f}%)")
+            percentage = (count/total_jobs*100)
+            print(f"     • {str(exp):8s}: {count:3d} jobs ({percentage:5.1f}%)")
         
         # Company statistics
         unique_companies = df[df['Company'] != "Not Specified"]['Company'].nunique()
@@ -904,21 +1171,18 @@ def run_scraper_with_config(user_config=None):
         job_type_counts = df['Job Type'].value_counts()
         print(f"\n  💼 Job Type Distribution:")
         for job_type, count in job_type_counts.items():
-            percentage = (count/len(df)*100)
+            percentage = (count/total_jobs*100)
             print(f"     • {job_type:12s}: {count:3d} jobs ({percentage:5.1f}%)")
     
     execution_time = (time.time() - start_time) / 60
     print("\n" + "=" * 80)
     print(f"✅ SCRAPING COMPLETED!")
-    print(f"⏱️ Time: {execution_time:.2f} minutes")
+    print(f"⏱️  Time: {execution_time:.2f} minutes")
     print(f"📊 Jobs: {len(all_jobs)}")
-    print(f"🎯 Target: {max_jobs} jobs")
-    print(f"📈 Success Rate: {len(all_jobs)/max_jobs*100:.1f}%")
     print("=" * 80)
     
     # Final summary with enhanced experience metrics
     if all_jobs:
-        df = pd.DataFrame(all_jobs)
         exp_extraction_rate = (df[df['Experience'] != "0"]['Experience'].count() / len(df)) * 100
         print(f"\n🎯 EXPERIENCE EXTRACTION SUMMARY:")
         print(f"   • Successful experience extraction: {exp_extraction_rate:.1f}%")
@@ -1000,8 +1264,5 @@ if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == 'test':
         test_experience_extraction()
     else:
-        # Run with 50 samples for testing
-        test_config = JOB_CONFIG.copy()
-        test_config['max_jobs'] = 50
-        print("🚀 Running enhanced scraper with 50 samples...")
-        run_scraper_with_config(test_config)
+        print("🚀 Running enhanced scraper without job limits...")
+        run_scraper_with_config()
