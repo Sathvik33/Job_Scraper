@@ -124,29 +124,7 @@ st.markdown("<h3 class='white-title'>Discover your next opportunity with AI-powe
 # Sidebar - Configuration
 with st.sidebar:
     st.header("⚙️ Configuration")
-
-    # Scraping Intensity Selection
-    st.subheader("📊 Scraping Intensity")
-    scraping_intensity = st.selectbox(
-        "Select scraping intensity",
-        options=["Light", "Balanced", "Comprehensive"],
-        index=1,
-        help="Light: Quick scan (1-2 min), Balanced: Standard (3-5 min), Comprehensive: Deep scan (8-15 min)"
-    )
     
-    # Show expected results based on intensity
-    intensity_info = {
-        "Light": {"jobs": "500-1,000", "time": "1-2 minutes", "description": "Quick scan for recent jobs"},
-        "Balanced": {"jobs": "1,500-3,000", "time": "3-5 minutes", "description": "Standard comprehensive search"},
-        "Comprehensive": {"jobs": "5,000+", "time": "8-15 minutes", "description": "Deep scan across all sources"}
-    }
-    
-    st.info(f"**{intensity_info[scraping_intensity]['description']}**\n\n"
-            f"Expected: **{intensity_info[scraping_intensity]['jobs']} jobs**\n"
-            f"Time: **{intensity_info[scraping_intensity]['time']}**")
-
-    st.markdown("---")
-
     # Job Titles Selection with category grouping
     st.subheader("🎯 Job Titles")
     
@@ -228,7 +206,7 @@ with st.sidebar:
         if not selected_titles:
             st.warning("⚠️ Please select at least one Job Title to start scraping.")
         else:
-            with st.spinner(f"🔄 Scraping jobs with {scraping_intensity} intensity... This may take {intensity_info[scraping_intensity]['time']}"):
+            with st.spinner("🔄 Scraping jobs... This may take a few minutes."):
                 st.session_state.jobs_data = None
                 st.session_state.data_loaded = False
 
@@ -237,8 +215,8 @@ with st.sidebar:
                     'job_types': job_types_selected,
                     'locations': locations if locations else ['India'],
                     'platforms': platforms if platforms else ['linkedin'],
-                    'scraping_intensity': scraping_intensity.lower(),
                     'experience_level': experience_filter
+                    # 'scraping_intensity' key is now removed
                 }
 
                 try:
@@ -276,7 +254,7 @@ with st.sidebar:
 
 # Main content area
 if st.session_state.scraping_complete and st.session_state.last_scrape_time:
-    st.info(f"🕒 Last scraped: {st.session_state.last_scrape_time.strftime('%Y-%m-%d %H:%M:%S')} | Intensity: {scraping_intensity}")
+    st.info(f"🕒 Last scraped: {st.session_state.last_scrape_time.strftime('%Y-%m-%d %H:%M:%S')}")
 
 if st.session_state.jobs_data is not None and not st.session_state.jobs_data.empty:
     df = st.session_state.jobs_data.copy()
@@ -373,27 +351,27 @@ if st.session_state.jobs_data is not None and not st.session_state.jobs_data.emp
         with viz_col1:
             job_type_counts = filtered_df['Job Type'].value_counts()
             fig1 = px.pie(values=job_type_counts.values, names=job_type_counts.index,
-                         title="Job Type Distribution",
-                         color_discrete_sequence=px.colors.qualitative.Set3)
+                          title="Job Type Distribution",
+                          color_discrete_sequence=px.colors.qualitative.Set3)
             fig1.update_layout(plot_bgcolor='rgba(255,255,255,0.9)',
-                              paper_bgcolor='rgba(255,255,255,0.9)',
-                              font=dict(size=12),
-                              title_font=dict(size=16, color='#1f2937', family='Arial Black'))
+                               paper_bgcolor='rgba(255,255,255,0.9)',
+                               font=dict(size=12),
+                               title_font=dict(size=16, color='#1f2937', family='Arial Black'))
             st.plotly_chart(fig1, use_container_width=True)
 
         with viz_col2:
             top_companies = filtered_df[filtered_df['Company'] != 'Not Specified']['Company'].value_counts().head(10)
             fig2 = px.bar(x=top_companies.values, y=top_companies.index,
-                         orientation='h',
-                         title="Top 10 Companies Hiring",
-                         labels={'x': 'Number of Jobs', 'y': 'Company'},
-                         color=top_companies.values,
-                         color_continuous_scale='Viridis')
+                          orientation='h',
+                          title="Top 10 Companies Hiring",
+                          labels={'x': 'Number of Jobs', 'y': 'Company'},
+                          color=top_companies.values,
+                          color_continuous_scale='Viridis')
             fig2.update_layout(plot_bgcolor='rgba(255,255,255,0.9)',
-                              paper_bgcolor='rgba(255,255,255,0.9)',
-                              showlegend=False,
-                              font=dict(size=12),
-                              title_font=dict(size=16, color='#1f2937', family='Arial Black'))
+                               paper_bgcolor='rgba(255,255,255,0.9)',
+                               showlegend=False,
+                               font=dict(size=12),
+                               title_font=dict(size=16, color='#1f2937', family='Arial Black'))
             st.plotly_chart(fig2, use_container_width=True)
 
         st.markdown("<br>", unsafe_allow_html=True)
@@ -402,30 +380,30 @@ if st.session_state.jobs_data is not None and not st.session_state.jobs_data.emp
         with exp_col1:
             exp_counts = filtered_df['Experience'].value_counts().head(10)
             fig3 = px.bar(x=exp_counts.index, y=exp_counts.values,
-                         title="Experience Level Distribution",
-                         labels={'x': 'Experience', 'y': 'Number of Jobs'},
-                         color=exp_counts.values,
-                         color_continuous_scale='Blues')
+                          title="Experience Level Distribution",
+                          labels={'x': 'Experience', 'y': 'Number of Jobs'},
+                          color=exp_counts.values,
+                          color_continuous_scale='Blues')
             fig3.update_layout(plot_bgcolor='rgba(255,255,255,0.9)',
-                              paper_bgcolor='rgba(255,255,255,0.9)',
-                              showlegend=False,
-                              font=dict(size=12),
-                              title_font=dict(size=16, color='#1f2937', family='Arial Black'))
+                               paper_bgcolor='rgba(255,255,255,0.9)',
+                               showlegend=False,
+                               font=dict(size=12),
+                               title_font=dict(size=16, color='#1f2937', family='Arial Black'))
             st.plotly_chart(fig3, use_container_width=True)
 
         with exp_col2:
             location_counts = filtered_df[filtered_df['Location'] != 'Not Specified']['Location'].value_counts().head(10)
             fig4 = px.bar(x=location_counts.values, y=location_counts.index,
-                         orientation='h',
-                         title="Top 10 Locations",
-                         labels={'x': 'Number of Jobs', 'y': 'Location'},
-                         color=location_counts.values,
-                         color_continuous_scale='Greens')
+                          orientation='h',
+                          title="Top 10 Locations",
+                          labels={'x': 'Number of Jobs', 'y': 'Location'},
+                          color=location_counts.values,
+                          color_continuous_scale='Greens')
             fig4.update_layout(plot_bgcolor='rgba(255,255,255,0.9)',
-                              paper_bgcolor='rgba(255,255,255,0.9)',
-                              showlegend=False,
-                              font=dict(size=12),
-                              title_font=dict(size=16, color='#1f2937', family='Arial Black'))
+                               paper_bgcolor='rgba(255,255,255,0.9)',
+                               showlegend=False,
+                               font=dict(size=12),
+                               title_font=dict(size=16, color='#1f2937', family='Arial Black'))
             st.plotly_chart(fig4, use_container_width=True)
 
         # Job Listings Table
@@ -467,7 +445,7 @@ if st.session_state.jobs_data is not None and not st.session_state.jobs_data.emp
 else:
     st.markdown("""
         <div style='background: rgba(255, 255, 255, 0.95); padding: 3rem; border-radius: 15px;
-                    box-shadow: 0 10px 25px rgba(0,0,0,0.1); text-align: center; margin-top: 2rem;'>
+                     box-shadow: 0 10px 25px rgba(0,0,0,0.1); text-align: center; margin-top: 2rem;'>
             <h2 style='color: #1f2937; margin-bottom: 1rem;'>👋 Welcome to the Job Scraper Dashboard!</h2>
             <p style='color: #6b7280; font-size: 1.2rem; line-height: 1.8;'>
                 Configure your targeted job search in the sidebar.<br>

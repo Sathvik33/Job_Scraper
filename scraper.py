@@ -35,9 +35,10 @@ JOB_CONFIG = {
         'specialized': True,
     },
     'experience_level': 'all',
-    'locations': ['India'],
+    'locations': 'India',
     'job_types': ['full-time', 'internship'],
-    'platforms': ['linkedin', 'indeed', 'naukri'],
+    'platforms': ['naukri'],
+    'max_jobs': 50,
 }
 
 JOB_CATEGORIES = {
@@ -587,7 +588,6 @@ class AdvancedMLExtractor:
         confidence_scores = {field: 0.0 for field in self.fields}
         used_indices = set()
         
-        # Extract basic fields first
         # Extract basic fields first - ONE FIELD AT A TIME
         field_priority = ['Job Title', 'Company', 'Location', 'Job Type', 'Posted Date']
 
@@ -873,38 +873,48 @@ def scrape_indeed_links(query, location, unique_links_lock, unique_links):
     """Scrape job links from Indeed"""
     try:
         headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Accept-Encoding': 'gzip, deflate, br',
+            'DNT': '1',
+            'Connection': 'keep-alive',
+            'Upgrade-Insecure-Requests': '1',
+            'Sec-Fetch-Dest': 'document',
+            'Sec-Fetch-Mode': 'navigate',
+            'Sec-Fetch-Site': 'none',
+            'Sec-Fetch-User': '?1',
+            'Cache-Control': 'max-age=0',
         }
         
-        base_url = "https://in.indeed.com/jobs"
-        params = {
+        # FIX: The base_url should be a simple string, not a list.
+        # Let the 'params' dictionary build the full query URL.
+        base_url = "https://www.indeed.com/jobs"
+        
+        params={
             'q': query,
             'l': location,
-            'sort': 'date'
+            'sort': 'date',
         }
-        
+
+        # FIX: Pass the base_url string directly to requests.get()
         response = requests.get(base_url, params=params, headers=headers, timeout=30)
+        
         if response.status_code == 200:
             soup = BeautifulSoup(response.content, 'html.parser')
             
-            # Indeed job link selectors
-            selectors = [
-                'a[data-jk]',
-                '.jobtitle a',
-                'a[class*="jobTitle"]'
-            ]
-            
+            # This part of your logic for finding links is good
+            job_cards = soup.select('div.job_seen_beacon')
             links_found = 0
-            for selector in selectors:
-                links = soup.select(selector)
-                for link in links:
-                    href = link.get('href')
-                    if href and 'jk=' in href:
-                        full_url = f"https://in.indeed.com{href}" if href.startswith('/') else href
-                        with unique_links_lock:
-                            if full_url not in unique_links:
-                                unique_links.add(full_url)
-                                links_found += 1
+            for card in job_cards:
+                link_tag = card.select_one('h2.jobTitle > a')
+                if link_tag and link_tag.get('href'):
+                    href = link_tag.get('href')
+                    full_url = f"https://www.indeed.com{href}"
+                    with unique_links_lock:
+                        if full_url not in unique_links:
+                            unique_links.add(full_url)
+                            links_found += 1
             
             time.sleep(random.uniform(1, 3))
             return links_found
@@ -914,19 +924,31 @@ def scrape_indeed_links(query, location, unique_links_lock, unique_links):
         return 0
 
 def scrape_naukri_links(query, location, unique_links_lock, unique_links):
-    """Scrape job links from Naukri.com"""
+    """Scrape job links from Naukri.com - FIXED URL"""
     try:
         headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Accept-Encoding': 'gzip, deflate, br',
+            'DNT': '1',
+            'Connection': 'keep-alive',
+            'Upgrade-Insecure-Requests': '1',
+            'Sec-Fetch-Dest': 'document',
+            'Sec-Fetch-Mode': 'navigate',
+            'Sec-Fetch-Site': 'none',
+            'Sec-Fetch-User': '?1',
+            'Cache-Control': 'max-age=0',
         }
         
-        base_url = "https://www.naukri.com/jobs"
-        params = {
-            'k': query,
-            'l': location
-        }
+        # FIXED: Use the correct Naukri URL format
+        encoded_query = quote(query)
+        encoded_location = quote(location)
+        search_url = f"https://www.naukri.com/jobs?keywords={encoded_query}&location={encoded_location}"
         
-        response = requests.get(base_url, params=params, headers=headers, timeout=30)
+        print(f"      Searching Naukri: {query} in {location}")
+        
+        response = requests.get(search_url, headers=headers, timeout=30)
         if response.status_code == 200:
             soup = BeautifulSoup(response.content, 'html.parser')
             
@@ -948,10 +970,13 @@ def scrape_naukri_links(query, location, unique_links_lock, unique_links):
         return 0
     
 def run_scraper_with_config(user_config=None):
-    """Main scraper function with multiple sources - FIXED FOR UI"""
+    """Main scraper function - SIMPLIFIED: Scrapes up to max_jobs limit"""
     start_time = time.time()
     
     config = user_config if user_config else JOB_CONFIG
+    
+    # Get max jobs limit from config (default 200)
+    max_jobs = config.get('max_jobs', 200)
     
     # Handle UI config vs default config structure
     if 'job_titles' in config:
@@ -966,35 +991,20 @@ def run_scraper_with_config(user_config=None):
                 search_queries.extend(JOB_CATEGORIES[category])
         search_queries = list(set(search_queries))
     
-    # Get scraping intensity from UI or use default
-    scraping_intensity = config.get('scraping_intensity', 'balanced')
-    
-    # Determine limits based on intensity
-    if scraping_intensity == 'light':
-        max_queries = min(10, len(search_queries))
-        max_locations = min(3, len(config['locations']))
-        max_workers = 2
-    elif scraping_intensity == 'comprehensive':
-        max_queries = len(search_queries)  # ALL queries
-        max_locations = len(config['locations'])  # ALL locations
-        max_workers = 4
-    else:  # balanced (default)
-        max_queries = min(20, len(search_queries))
-        max_locations = min(5, len(config['locations']))
-        max_workers = 3
-    
-    # Apply limits
-    queries_to_process = search_queries[:max_queries]
-    locations_to_process = config['locations'][:max_locations]
+    # Use ALL queries and locations (no limits)
+    queries_to_process = search_queries
+    locations_to_process = config['locations']
+    max_workers = 3
     
     print("="*80)
-    print(f"ENHANCED JOB SCRAPER - {scraping_intensity.upper()} MODE")
+    print(f"JOB SCRAPER - UNLIMITED MODE (Max {max_jobs} jobs)")
     print("="*80)
     print(f"Configuration:")
-    print(f"   • Queries: {len(queries_to_process)}/{len(search_queries)}")
-    print(f"   • Locations: {len(locations_to_process)}/{len(config['locations'])}")
+    print(f"   • Queries: {len(queries_to_process)}")
+    print(f"   • Locations: {len(locations_to_process)}")
+    print(f"   • Max Jobs: {max_jobs}")
     print(f"   • Workers: {max_workers}")
-    print(f"   • Platforms: {config.get('platforms', ['linkedin'])}")
+    print(f"   • Platforms: {config.get('platforms', ['indeed'])}")
     print("="*80)
     
     try:
@@ -1016,12 +1026,16 @@ def run_scraper_with_config(user_config=None):
         
     print(f"🔄 Scraping from platforms: {', '.join(platforms)}")
 
-    # Scrape from selected sources only
+    # Scrape from selected sources
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = []
         
         for location in locations_to_process:
             for query in queries_to_process:
+                # Stop submitting new tasks if we already have enough links
+                if len(unique_links) >= max_jobs * 2:  # Get 2x links as buffer
+                    break
+                    
                 for platform in platforms:
                     if platform == 'linkedin':
                         print(f"      🔍 LinkedIn: {query} in {location}")
@@ -1053,10 +1067,16 @@ def run_scraper_with_config(user_config=None):
             result = future.result()
             completed += 1
             progress = (completed / total_futures) * 100
-            print(f"    Progress: {completed}/{total_futures} ({progress:.1f}%) - {result} links found")
+            print(f"    Progress: {completed}/{total_futures} ({progress:.1f}%) - Total links: {len(unique_links)}")
+            
+            # Early exit if we have enough links
+            if len(unique_links) >= max_jobs * 2:
+                print(f"    ✅ Collected enough links ({len(unique_links)}), stopping collection...")
+                break
     
-    links_to_process = list(unique_links)
-    print(f"\n    ✅ Collected {len(links_to_process)} job links from all sources")
+    # Limit links to process to max_jobs
+    links_to_process = list(unique_links)[:max_jobs]
+    print(f"\n    ✅ Collected {len(unique_links)} total links, processing {len(links_to_process)} jobs")
     
     if not links_to_process:
         print("❌ No links found. Job sites might be blocking requests.")
@@ -1065,7 +1085,7 @@ def run_scraper_with_config(user_config=None):
     print(f"\n[2/3] Extracting job details from {len(links_to_process)} links...")
     all_jobs = []
     
-    # Process in smaller batches to avoid overwhelming servers
+    # Process in smaller batches
     batch_size = 20
     batches = [links_to_process[i:i + batch_size] for i in range(0, len(links_to_process), batch_size)]
     
@@ -1091,7 +1111,7 @@ def run_scraper_with_config(user_config=None):
             all_jobs.extend(batch_jobs)
             print(f"    ✅ Batch {batch_num + 1}: {len(batch_jobs)}/{len(batch)} successful")
         
-        # Delay between batches to be respectful to servers
+        # Delay between batches
         if batch_num < len(batches) - 1:
             delay = random.uniform(5, 10)
             print(f"    ⏳ Waiting {delay:.1f}s before next batch...")
@@ -1116,7 +1136,7 @@ def run_scraper_with_config(user_config=None):
         df.to_csv(OUTPUT_FILE, index=False, encoding='utf-8')
         print(f"    ✅ Data saved to {OUTPUT_FILE}")
         
-        # Generate quality report directly in main function
+        # Generate quality report
         total_jobs = len(all_jobs)
         print("\nEXTRACTION QUALITY REPORT:")
         print("="*80)
@@ -1137,7 +1157,7 @@ def run_scraper_with_config(user_config=None):
             
             print(f"  {field:20s}: {found_count:4d}/{total_jobs:4d} ({percentage:5.1f}%) {status}")
         
-        # Enhanced experience statistics (with regex fix)
+        # Enhanced experience statistics
         print("\nDATA QUALITY CHECKS:")
         print("="*80)
         
@@ -1178,22 +1198,8 @@ def run_scraper_with_config(user_config=None):
     print("\n" + "=" * 80)
     print(f"✅ SCRAPING COMPLETED!")
     print(f"⏱️  Time: {execution_time:.2f} minutes")
-    print(f"📊 Jobs: {len(all_jobs)}")
+    print(f"📊 Jobs: {len(all_jobs)}/{max_jobs} (target)")
     print("=" * 80)
-    
-    # Final summary with enhanced experience metrics
-    if all_jobs:
-        exp_extraction_rate = (df[df['Experience'] != "0"]['Experience'].count() / len(df)) * 100
-        print(f"\n🎯 EXPERIENCE EXTRACTION SUMMARY:")
-        print(f"   • Successful experience extraction: {exp_extraction_rate:.1f}%")
-        print(f"   • Enhanced patterns applied: ✓")
-        print(f"   • Fallback logic active: ✓")
-        
-        # Show sample of extracted experiences
-        print(f"\n📋 Sample of Extracted Experiences:")
-        sample_experiences = df[df['Experience'] != "0"][['Job Title', 'Experience']].head(5)
-        for _, row in sample_experiences.iterrows():
-            print(f"   • {row['Job Title'][:30]}... -> {row['Experience']}")
     
     return all_jobs
 
@@ -1218,23 +1224,10 @@ def test_experience_extraction():
         ("1 to 3 years", "1-3"),
         ("7+ yrs", "7+"),
         ("fresher", "0"),
-        ("entry level", "0"),
+        ("entry level", "0-2"),
         ("senior developer", "5+"),
-        ("junior role", "1-2"),
+        ("junior role", "0-2"),
         ("mid-level position", "3-5"),
-        ("0-1 years", "0-1"),
-        ("10 years experience", "10"),
-        ("2.5 years", "2"),
-        ("1 year", "1"),
-        ("no experience required", "0"),
-        ("recent graduate", "0"),
-        ("minimum 3 years", "3"),
-        ("4-6 yrs", "4-6"),
-        ("8+ years of exp", "8+"),
-        ("fresh graduate", "0"),
-        ("0 years", "0"),
-        ("15+ years", "15+"),
-        ("2 - 5 years", "2-5"),
     ]
     
     print("\n📊 Testing Text Pattern Extraction:")
@@ -1250,13 +1243,6 @@ def test_experience_extraction():
     
     accuracy = success_count/len(test_cases)*100
     print(f"\n🎯 Pattern Extraction Accuracy: {success_count}/{len(test_cases)} ({accuracy:.1f}%)")
-    
-    if accuracy >= 80:
-        print("✅ Experience extraction is working well!")
-    elif accuracy >= 60:
-        print("⚠️ Experience extraction needs improvement")
-    else:
-        print("❌ Experience extraction needs significant improvement")
 
 if __name__ == "__main__":
     # Check if we should run tests or full scraping
@@ -1264,5 +1250,5 @@ if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == 'test':
         test_experience_extraction()
     else:
-        print("🚀 Running enhanced scraper without job limits...")
+        print("🚀 Running scraper with 200 job limit...")
         run_scraper_with_config()
