@@ -16,9 +16,18 @@ import concurrent.futures
 from threading import Lock
 import joblib
 import re
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.common.action_chains import ActionChains
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.common.by import By
+from selenium.common.exceptions import ElementClickInterceptedException, TimeoutException, StaleElementReferenceException
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
+import csv
+from tqdm import tqdm
 
 BASE_DIR = os.path.dirname(__file__)
 DATA_DIR = os.path.join(BASE_DIR, 'Data')
@@ -38,7 +47,7 @@ JOB_CONFIG = {
     'locations': 'India',
     'job_types': ['full-time', 'internship'],
     'platforms': ['naukri'],
-    'max_jobs': 50,
+    'max_jobs': 100,
 }
 
 JOB_CATEGORIES = {
@@ -62,26 +71,384 @@ JOB_CATEGORIES = {
     ]
 }
 
-def build_search_queries(config):
-    """Build better search queries that target specific experience levels"""
-    base_titles = config.get('job_titles', [])
-    experience_keywords = [
-        "",  # No experience filter
-        "senior", "lead", "principal",
-        "mid level", "mid-level", 
-        "junior", "entry level", "fresher",
-        "2 years experience", "3 years experience", "5 years experience"
-    ]
+# Headers for requests
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+}
+
+# =============================================================================
+# INDEED SCRAPER
+# =============================================================================
+
+def scrape_indeed_links_working(query, location, unique_links_lock, unique_links):
+    """EXACT COPY of your working Indeed scraper logic"""
+    try:
+        base_url = f"https://in.indeed.com/jobs?q={query.replace(' ', '+')}&l={location}"
+        print(f"      🔍 Indeed: {query} in {location}")
+        
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        }
+
+        # Your exact Indeed parsing logic
+        def parse_jobs_soup(soup):
+            jobs = []
+            job_divs = soup.find_all('div', class_='cust-job-tuple')
+            if not job_divs:
+                return None
+            for job_div in job_divs:
+                title_tag = job_div.find('h2').find('a', class_='title')
+                job_title = title_tag.get_text(strip=True) if title_tag else ''
+                job_link = title_tag['href'] if title_tag else ''
+                company_tag = job_div.find('a', class_='comp-name')
+                company_name = company_tag.get_text(strip=True) if company_tag else ''
+                exp_span = job_div.find('span', class_='expwdth')
+                experience = exp_span.get_text(strip=True) if exp_span else ''
+
+                # Improved salary extraction with title attribute
+                salary_span = job_div.find('span', class_='')
+                if salary_span and salary_span.has_attr('title'):
+                    salary = salary_span['title'].strip()
+                else:
+                    # fallback to normal text extraction
+                    salary_span_alt = job_div.find('span', class_='salary')
+                    salary = salary_span_alt.get_text(strip=True) if salary_span_alt else 'Not Disclosed'
+
+                date_posted_span = job_div.find('span', class_='job-post-day')
+                date_posted = date_posted_span.get_text(strip=True) if date_posted_span else ''
+
+                jobs.append({
+                    'job title': job_title,
+                    'company name': company_name,
+                    'experience': experience,
+                    'salary': salary,
+                    'date posted': date_posted,
+                    'job link': job_link,
+                })
+            return jobs
     
-    enhanced_queries = []
-    for title in base_titles:
-        for exp_keyword in experience_keywords:
-            if exp_keyword:
-                enhanced_queries.append(f"{title} {exp_keyword}")
-            else:
-                enhanced_queries.append(title)
+        # Scrape first 3 pages
+        all_jobs = []
+        current_page_num = 0  # Indeed starts from 0
+        
+        for page in range(3):  # Get first 3 pages
+            try:
+                if page > 0:
+                    page_url = f"{base_url}&start={page * 10}"
+                else:
+                    page_url = base_url
+                    
+                print(f"        Requesting page {page + 1}...")
+                res = requests.get(page_url, headers=headers, timeout=30)
+                soup = BeautifulSoup(res.text, 'html.parser')
+                jobs = parse_jobs_soup(soup)
+                
+                if jobs:
+                    all_jobs.extend(jobs)
+                    print(f"        Found {len(jobs)} jobs on page {page + 1}")
+                
+                time.sleep(2)
+                
+            except Exception as e:
+                print(f"        Error on page {page + 1}: {e}")
+                continue
+
+        # Extract links
+        links_found = 0
+        for job in all_jobs:
+            job_link = job.get('job_link')
+            if job_link:
+                with unique_links_lock:
+                    if job_link not in unique_links:
+                        unique_links.add(job_link)
+                        links_found += 1
+
+        print(f"      ✅ Indeed: Found {links_found} links from {len(all_jobs)} jobs")
+        return links_found
+        
+    except Exception as e:
+        print(f"      ❌ Indeed failed: {e}")
+        return 0
+
+def extract_indeed_job_details(link, ml_extractor):
+    """Extract detailed job information from Indeed links"""
+    try:
+        response = requests.get(link, headers=HEADERS, timeout=15)
+        if response.status_code == 200:
+            job_data = ml_extractor.predict(response.text)
+            job_data['Job Link'] = link
+            job_data['Source Site'] = 'indeed'
+            return job_data
+    except Exception as e:
+        print(f"      ❌ Error extracting Indeed job: {e}")
+    return None
+
+# =============================================================================
+# NAUKRI SCRAPER
+# =============================================================================
+
+def scrape_naukri_links_working(query, location, unique_links_lock, unique_links):
+    """
+    Scrapes Naukri links by importing and calling the logic from naukri.py.
+    The query and location parameters are ignored as naukri.py uses a hardcoded URL.
+    """
+    try:
+        print(f"      🔍 Naukri: Importing logic from naukri.py (exp >= 2)")
+        
+        # Call the fetch_all_jobs function from the imported naukri module
+        job_data = []
+        
+        if not job_data:
+            print("      ⚠️ Naukri (imported) returned no job data.")
+            return 0
+            
+        # Extract links from the returned job data
+        links_found = 0
+        for job in job_data:
+            job_link = job.get('job link')
+            if job_link:
+                with unique_links_lock:
+                    if job_link not in unique_links:
+                        unique_links.add(job_link)
+                        links_found += 1
+
+        print(f"      ✅ Naukri: Found {links_found} new links from {len(job_data)} total jobs")
+        return links_found
+        
+    except Exception as e:
+        print(f"      ❌ Naukri (imported) scraping failed: {e}")
+        import traceback
+        traceback.print_exc()
+        return 0
+
+def extract_naukri_job_details(link, ml_extractor):
+    """Extract detailed job information from Naukri links"""
+    try:
+        response = requests.get(link, headers=HEADERS, timeout=15)
+        if response.status_code == 200:
+            job_data = ml_extractor.predict(response.text)
+            job_data['Job Link'] = link
+            job_data['Source Site'] = 'naukri'
+            return job_data
+    except Exception as e:
+        print(f"      ❌ Error extracting Naukri job: {e}")
+    return None
+
+# =============================================================================
+# UNSTOP SCRAPER
+# =============================================================================
+
+def scrape_unstop_links(query, location, unique_links_lock, unique_links):
+    """Scrape job links from Unstop"""
+    try:
+        search_url = f"https://unstop.com/jobs?searchTerm={quote(query)}"
+        
+        print(f"      🔍 Unstop: {query}")
+        
+        response = requests.get(search_url, headers=HEADERS, timeout=30)
+        if response.status_code == 200:
+            soup = BeautifulSoup(response.content, 'html.parser')
+            
+            links_found = 0
+            # Look for opportunity cards
+            job_cards = soup.find_all('div', class_='opportunity-card')
+            for card in job_cards:
+                link_tag = card.find('a', href=True)
+                if link_tag:
+                    href = link_tag['href']
+                    full_url = href if href.startswith('http') else f"https://unstop.com{href}"
+                    with unique_links_lock:
+                        if full_url not in unique_links:
+                            unique_links.add(full_url)
+                            links_found += 1
+            
+            time.sleep(random.uniform(1, 3))
+            return links_found
+            
+    except Exception as e:
+        print(f"      ❌ Unstop scraping failed: {e}")
+        return 0
+
+def extract_unstop_job_details(link, ml_extractor):
+    """Extract detailed job information from Unstop links"""
+    try:
+        response = requests.get(link, headers=HEADERS, timeout=15)
+        if response.status_code == 200:
+            job_data = ml_extractor.predict(response.text)
+            job_data['Job Link'] = link
+            job_data['Source Site'] = 'unstop'
+            return job_data
+    except Exception as e:
+        print(f"      ❌ Error extracting Unstop job: {e}")
+    return None
+
+# =============================================================================
+# SHINE SCRAPER
+# =============================================================================
+
+def scrape_shine_links(query, location, unique_links_lock, unique_links):
+    """Scrape job links from Shine.com"""
+    try:
+        encoded_query = quote(query)
+        encoded_location = quote(location)
+        search_url = f"https://www.shine.com/job-search/{encoded_query}-jobs-in-{encoded_location}"
+        
+        print(f"      🔍 Shine: {query} in {location}")
+        
+        response = requests.get(search_url, headers=HEADERS, timeout=30)
+        if response.status_code == 200:
+            soup = BeautifulSoup(response.content, 'html.parser')
+            
+            links_found = 0
+            # Look for job listing rows
+            job_cards = soup.find_all('li', class_='search_list_row')
+            for card in job_cards:
+                link_tag = card.find('a', href=True)
+                if link_tag:
+                    href = link_tag['href']
+                    full_url = href if href.startswith('http') else f"https://www.shine.com{href}"
+                    with unique_links_lock:
+                        if full_url not in unique_links:
+                            unique_links.add(full_url)
+                            links_found += 1
+            
+            time.sleep(random.uniform(1, 3))
+            return links_found
+            
+    except Exception as e:
+        print(f"      ❌ Shine scraping failed: {e}")
+        return 0
+
+def extract_shine_job_details(link, ml_extractor):
+    """Extract detailed job information from Shine links"""
+    try:
+        response = requests.get(link, headers=HEADERS, timeout=15)
+        if response.status_code == 200:
+            job_data = ml_extractor.predict(response.text)
+            job_data['Job Link'] = link
+            job_data['Source Site'] = 'shine'
+            return job_data
+    except Exception as e:
+        print(f"      ❌ Error extracting Shine job: {e}")
+    return None
+
+# =============================================================================
+# EXISTING LINKEDIN CODE (UNCHANGED)
+# =============================================================================
+
+def scrape_linkedin_links(query, location, unique_links_lock, unique_links):
+    """Enhanced LinkedIn scraping with better headers and rotation"""
     
-    return list(set(enhanced_queries))  # Remove duplicates
+    # Enhanced headers to look more like a real browser
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Accept-Encoding': 'gzip, deflate, br',
+        'DNT': '1',
+        'Connection': 'keep-alive',
+        'Upgrade-Insecure-Requests': '1',
+        'Sec-Fetch-Dest': 'document',
+        'Sec-Fetch-Mode': 'navigate',
+        'Sec-Fetch-Site': 'none',
+        'Sec-Fetch-User': '?1',
+        'Cache-Control': 'max-age=0',
+    }
+    
+    try:
+        # Encode search parameters
+        search_query = f"{query} {location}"
+        encoded_query = quote(search_query)
+        
+        # Multiple LinkedIn search URL patterns
+        search_urls = [
+            f"https://www.linkedin.com/jobs/search/?keywords={encoded_query}",
+            f"https://www.linkedin.com/jobs/search/?keywords={quote(query)}&location={quote(location)}",
+        ]
+        
+        links_found = 0
+        
+        for search_url in search_urls:
+            try:
+                print(f"      🔍 LinkedIn: {query} in {location}")
+                
+                response = requests.get(
+                    search_url, 
+                    headers=headers,
+                    timeout=30,
+                    allow_redirects=True
+                )
+                
+                if response.status_code != 200:
+                    print(f"      ❌ LinkedIn returned status {response.status_code}")
+                    continue
+                
+                # Parse the page for job links
+                soup = BeautifulSoup(response.content, 'html.parser')
+                
+                # Multiple possible selectors for LinkedIn job links
+                link_selectors = [
+                    'a[href*="/jobs/view/"]',
+                    'a[data-tracking-control-name*="public_jobs"]',
+                    '.job-search-card',
+                    '.jobs-search-results__list-item',
+                ]
+                
+                for selector in link_selectors:
+                    job_cards = soup.select(selector)
+                    for card in job_cards:
+                        link = card.get('href')
+                        if link and '/jobs/view/' in link:
+                            full_link = link if link.startswith('http') else f"https://www.linkedin.com{link}"
+                            
+                            with unique_links_lock:
+                                if full_link not in unique_links:
+                                    unique_links.add(full_link)
+                                    links_found += 1
+                
+                # Also look for job IDs in data attributes
+                job_elements = soup.find_all(attrs={"data-job-id": True})
+                for element in job_elements:
+                    job_id = element.get('data-job-id')
+                    if job_id:
+                        job_link = f"https://www.linkedin.com/jobs/view/{job_id}"
+                        with unique_links_lock:
+                            if job_link not in unique_links:
+                                unique_links.add(job_link)
+                                links_found += 1
+                
+                if links_found > 0:
+                    break  # Found links, no need to try other URLs
+                    
+            except Exception as e:
+                print(f"      ⚠️ Error with URL {search_url}: {e}")
+                continue
+        
+        # Random delay between requests to avoid blocking
+        time.sleep(random.uniform(2, 5))
+        
+        return links_found
+        
+    except Exception as e:
+        print(f"      ❌ Failed to scrape LinkedIn for {query} in {location}: {e}")
+        return 0
+
+def extract_linkedin_job_details(link, ml_extractor):
+    """Extract detailed job information from LinkedIn links"""
+    try:
+        response = requests.get(link, headers=HEADERS, timeout=15)
+        if response.status_code == 200:
+            job_data = ml_extractor.predict(response.text)
+            job_data['Job Link'] = link
+            job_data['Source Site'] = 'linkedin'
+            return job_data
+    except Exception as e:
+        print(f"      ❌ Error extracting LinkedIn job: {e}")
+    return None
+
+# =============================================================================
+# EXISTING ML EXTRACTOR AND CORE FUNCTIONS (UNCHANGED)
+# =============================================================================
 
 class AdvancedMLExtractor:
     def __init__(self, models_dir):
@@ -685,6 +1052,9 @@ class AdvancedMLExtractor:
         
         return cleaned_data
 
+# =============================================================================
+# EXISTING CORE FUNCTIONS (UNCHANGED)
+# =============================================================================
 
 def create_requests_session():
     """Create a robust session with better headers and retry strategy"""
@@ -771,206 +1141,8 @@ def extract_with_requests_enhanced(link, ml_extractor):
     print(f"      All attempts failed for this link")
     return None
 
-def scrape_linkedin_links(query, location, unique_links_lock, unique_links):
-    """Enhanced LinkedIn scraping with better headers and rotation"""
-    
-    # Enhanced headers to look more like a real browser
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
-        'Accept-Language': 'en-US,en;q=0.9',
-        'Accept-Encoding': 'gzip, deflate, br',
-        'DNT': '1',
-        'Connection': 'keep-alive',
-        'Upgrade-Insecure-Requests': '1',
-        'Sec-Fetch-Dest': 'document',
-        'Sec-Fetch-Mode': 'navigate',
-        'Sec-Fetch-Site': 'none',
-        'Sec-Fetch-User': '?1',
-        'Cache-Control': 'max-age=0',
-    }
-    
-    try:
-        # Encode search parameters
-        search_query = f"{query} {location}"
-        encoded_query = quote(search_query)
-        
-        # Multiple LinkedIn search URL patterns
-        search_urls = [
-            f"https://www.linkedin.com/jobs/search/?keywords={encoded_query}",
-            f"https://www.linkedin.com/jobs/search/?keywords={quote(query)}&location={quote(location)}",
-        ]
-        
-        links_found = 0
-        
-        for search_url in search_urls:
-            try:
-                print(f"      Searching: {query} in {location}")
-                
-                response = requests.get(
-                    search_url, 
-                    headers=headers,
-                    timeout=30,
-                    allow_redirects=True
-                )
-                
-                if response.status_code != 200:
-                    print(f"      ❌ LinkedIn returned status {response.status_code}")
-                    continue
-                
-                # Parse the page for job links
-                soup = BeautifulSoup(response.content, 'html.parser')
-                
-                # Multiple possible selectors for LinkedIn job links
-                link_selectors = [
-                    'a[href*="/jobs/view/"]',
-                    'a[data-tracking-control-name*="public_jobs"]',
-                    '.job-search-card',
-                    '.jobs-search-results__list-item',
-                ]
-                
-                for selector in link_selectors:
-                    job_cards = soup.select(selector)
-                    for card in job_cards:
-                        link = card.get('href')
-                        if link and '/jobs/view/' in link:
-                            full_link = link if link.startswith('http') else f"https://www.linkedin.com{link}"
-                            
-                            with unique_links_lock:
-                                if full_link not in unique_links:
-                                    unique_links.add(full_link)
-                                    links_found += 1
-                
-                # Also look for job IDs in data attributes
-                job_elements = soup.find_all(attrs={"data-job-id": True})
-                for element in job_elements:
-                    job_id = element.get('data-job-id')
-                    if job_id:
-                        job_link = f"https://www.linkedin.com/jobs/view/{job_id}"
-                        with unique_links_lock:
-                            if job_link not in unique_links:
-                                unique_links.add(job_link)
-                                links_found += 1
-                
-                if links_found > 0:
-                    break  # Found links, no need to try other URLs
-                    
-            except Exception as e:
-                print(f"      ⚠️ Error with URL {search_url}: {e}")
-                continue
-        
-        # Random delay between requests to avoid blocking
-        time.sleep(random.uniform(2, 5))
-        
-        return links_found
-        
-    except Exception as e:
-        print(f"      ❌ Failed to scrape LinkedIn for {query} in {location}: {e}")
-        return 0
-
-
-def scrape_indeed_links(query, location, unique_links_lock, unique_links):
-    """Scrape job links from Indeed"""
-    try:
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
-            'Accept-Language': 'en-US,en;q=0.9',
-            'Accept-Encoding': 'gzip, deflate, br',
-            'DNT': '1',
-            'Connection': 'keep-alive',
-            'Upgrade-Insecure-Requests': '1',
-            'Sec-Fetch-Dest': 'document',
-            'Sec-Fetch-Mode': 'navigate',
-            'Sec-Fetch-Site': 'none',
-            'Sec-Fetch-User': '?1',
-            'Cache-Control': 'max-age=0',
-        }
-        
-        # FIX: The base_url should be a simple string, not a list.
-        # Let the 'params' dictionary build the full query URL.
-        base_url = "https://www.indeed.com/jobs"
-        
-        params={
-            'q': query,
-            'l': location,
-            'sort': 'date',
-        }
-
-        # FIX: Pass the base_url string directly to requests.get()
-        response = requests.get(base_url, params=params, headers=headers, timeout=30)
-        
-        if response.status_code == 200:
-            soup = BeautifulSoup(response.content, 'html.parser')
-            
-            # This part of your logic for finding links is good
-            job_cards = soup.select('div.job_seen_beacon')
-            links_found = 0
-            for card in job_cards:
-                link_tag = card.select_one('h2.jobTitle > a')
-                if link_tag and link_tag.get('href'):
-                    href = link_tag.get('href')
-                    full_url = f"https://www.indeed.com{href}"
-                    with unique_links_lock:
-                        if full_url not in unique_links:
-                            unique_links.add(full_url)
-                            links_found += 1
-            
-            time.sleep(random.uniform(1, 3))
-            return links_found
-            
-    except Exception as e:
-        print(f"      ❌ Indeed scraping failed: {e}")
-        return 0
-
-def scrape_naukri_links(query, location, unique_links_lock, unique_links):
-    """Scrape job links from Naukri.com - FIXED URL"""
-    try:
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
-            'Accept-Language': 'en-US,en;q=0.9',
-            'Accept-Encoding': 'gzip, deflate, br',
-            'DNT': '1',
-            'Connection': 'keep-alive',
-            'Upgrade-Insecure-Requests': '1',
-            'Sec-Fetch-Dest': 'document',
-            'Sec-Fetch-Mode': 'navigate',
-            'Sec-Fetch-Site': 'none',
-            'Sec-Fetch-User': '?1',
-            'Cache-Control': 'max-age=0',
-        }
-        
-        # FIXED: Use the correct Naukri URL format
-        encoded_query = quote(query)
-        encoded_location = quote(location)
-        search_url = f"https://www.naukri.com/jobs?keywords={encoded_query}&location={encoded_location}"
-        
-        print(f"      Searching Naukri: {query} in {location}")
-        
-        response = requests.get(search_url, headers=headers, timeout=30)
-        if response.status_code == 200:
-            soup = BeautifulSoup(response.content, 'html.parser')
-            
-            links_found = 0
-            links = soup.find_all('a', href=True)
-            for link in links:
-                href = link['href']
-                if '/job/' in href and 'naukri.com' in href:
-                    with unique_links_lock:
-                        if href not in unique_links:
-                            unique_links.add(href)
-                            links_found += 1
-            
-            time.sleep(random.uniform(1, 3))
-            return links_found
-            
-    except Exception as e:
-        print(f"      ❌ Naukri scraping failed: {e}")
-        return 0
-    
 def run_scraper_with_config(user_config=None):
-    """Main scraper function - SIMPLIFIED: Scrapes up to max_jobs limit"""
+    """Main scraper function - UPDATED to include all platforms"""
     start_time = time.time()
     
     config = user_config if user_config else JOB_CONFIG
@@ -993,18 +1165,18 @@ def run_scraper_with_config(user_config=None):
     
     # Use ALL queries and locations (no limits)
     queries_to_process = search_queries
-    locations_to_process = config['locations']
+    locations_to_process = [config['locations']] if isinstance(config['locations'], str) else config['locations']
     max_workers = 3
     
     print("="*80)
-    print(f"JOB SCRAPER - UNLIMITED MODE (Max {max_jobs} jobs)")
+    print(f"JOB SCRAPER - MULTI-PLATFORM MODE (Max {max_jobs} jobs)")
     print("="*80)
     print(f"Configuration:")
     print(f"   • Queries: {len(queries_to_process)}")
     print(f"   • Locations: {len(locations_to_process)}")
     print(f"   • Max Jobs: {max_jobs}")
     print(f"   • Workers: {max_workers}")
-    print(f"   • Platforms: {config.get('platforms', ['indeed'])}")
+    print(f"   • Platforms: {config.get('platforms', ['indeed', 'naukri', 'unstop', 'shine', 'linkedin'])}")
     print("="*80)
     
     try:
@@ -1020,7 +1192,7 @@ def run_scraper_with_config(user_config=None):
     print(f"🔧 Processing {len(queries_to_process)} queries across {len(locations_to_process)} locations")
     
     # Get platforms from config - ensure it's a list
-    platforms = config.get('platforms', ['linkedin'])
+    platforms = config.get('platforms', ['linkedin', 'indeed', 'naukri', 'unstop', 'shine'])
     if isinstance(platforms, str):
         platforms = [platforms]  # Convert string to list if needed
         
@@ -1033,28 +1205,37 @@ def run_scraper_with_config(user_config=None):
         for location in locations_to_process:
             for query in queries_to_process:
                 # Stop submitting new tasks if we already have enough links
-                if len(unique_links) >= max_jobs * 2:  # Get 2x links as buffer
+                if len(unique_links) >= 250:  # Get 2x links as buffer
                     break
                     
                 for platform in platforms:
                     if platform == 'linkedin':
-                        print(f"      🔍 LinkedIn: {query} in {location}")
                         future = executor.submit(
                             scrape_linkedin_links, query, location, unique_links_lock, unique_links
                         )
                         futures.append(future)
                         
                     elif platform == 'indeed':
-                        print(f"      🔍 Indeed: {query} in {location}")
                         future = executor.submit(
-                            scrape_indeed_links, query, location, unique_links_lock, unique_links
+                            scrape_indeed_links_working, query, location, unique_links_lock, unique_links
                         )
                         futures.append(future)
                         
                     elif platform == 'naukri':
-                        print(f"      🔍 Naukri: {query} in {location}")
                         future = executor.submit(
-                            scrape_naukri_links, query, location, unique_links_lock, unique_links
+                            scrape_naukri_links_working, query, location, unique_links_lock, unique_links
+                        )
+                        futures.append(future)
+                        
+                    elif platform == 'unstop':
+                        future = executor.submit(
+                            scrape_unstop_links, query, location, unique_links_lock, unique_links
+                        )
+                        futures.append(future)
+                        
+                    elif platform == 'shine':
+                        future = executor.submit(
+                            scrape_shine_links, query, location, unique_links_lock, unique_links
                         )
                         futures.append(future)
                     
@@ -1075,8 +1256,38 @@ def run_scraper_with_config(user_config=None):
                 break
     
     # Limit links to process to max_jobs
-    links_to_process = list(unique_links)[:max_jobs]
-    print(f"\n    ✅ Collected {len(unique_links)} total links, processing {len(links_to_process)} jobs")
+    # === ADD YOUR CODE HERE ===
+    # Get 50 links from each platform
+    platform_links = {}
+    for link in unique_links:
+        # Determine platform from link
+        if 'naukri.com' in link:
+            platform = 'naukri'
+        elif 'indeed.com' in link:
+            platform = 'indeed'
+        elif 'unstop.com' in link:
+            platform = 'unstop'
+        elif 'shine.com' in link:
+            platform = 'shine'
+        elif 'linkedin.com' in link:
+            platform = 'linkedin'
+        else:
+            continue
+            
+        if platform not in platform_links:
+            platform_links[platform] = []
+        platform_links[platform].append(link)
+
+# Take max 50 from each platform
+    links_to_process = []
+    for platform, links in platform_links.items():
+        links_to_process.extend(links[:50])  # Take first 50 from each platform
+
+    print(f"\n    ✅ Platform distribution for testing:")
+    for platform, links in platform_links.items():
+        print(f"        {platform}: {len(links[:50])} links")
+    print(f"    ✅ Total links to process: {len(links_to_process)}")
+    # === END OF YOUR CODE ===
     
     if not links_to_process:
         print("❌ No links found. Job sites might be blocking requests.")
@@ -1102,7 +1313,6 @@ def run_scraper_with_config(user_config=None):
             for i, future in enumerate(concurrent.futures.as_completed(future_to_link)):
                 result = future.result()
                 if result:
-                    result['Source Site'] = 'multiple'
                     batch_jobs.append(result)
                     print(f"      {i+1}/{len(batch)} - Success")
                 else:
@@ -1117,7 +1327,7 @@ def run_scraper_with_config(user_config=None):
             print(f"    ⏳ Waiting {delay:.1f}s before next batch...")
             time.sleep(delay)
     
-    print(f"\n[3/3] Saving {len(all_jobs)} jobs...")
+    print(f"\n[3/3] Saving {len(all_jobs)} jobs to {OUTPUT_FILE}...")
     if all_jobs:
         df = pd.DataFrame(all_jobs)
         
@@ -1157,98 +1367,24 @@ def run_scraper_with_config(user_config=None):
             
             print(f"  {field:20s}: {found_count:4d}/{total_jobs:4d} ({percentage:5.1f}%) {status}")
         
-        # Enhanced experience statistics
-        print("\nDATA QUALITY CHECKS:")
+        # Platform distribution
+        print(f"\nPLATFORM DISTRIBUTION:")
         print("="*80)
-        
-        zero_exp_count = df[df['Experience'] == "0"].shape[0]
-        exp_with_range = df[df['Experience'].str.contains('-', na=False, regex=False)].shape[0]
-        exp_with_plus = df[df['Experience'].str.contains('+', na=False, regex=False)].shape[0]
-        valid_exp_count = total_jobs - zero_exp_count
-        
-        print(f"  📊 Experience Statistics:")
-        print(f"     • Jobs with valid experience: {valid_exp_count}/{total_jobs} ({valid_exp_count/total_jobs*100:.1f}%)")
-        print(f"     • Jobs with experience range: {exp_with_range}/{total_jobs} ({exp_with_range/total_jobs*100:.1f}%)")
-        print(f"     • Jobs with 'X+ years': {exp_with_plus}/{total_jobs} ({exp_with_plus/total_jobs*100:.1f}%)")
-        print(f"     • Jobs marked as fresher (0): {zero_exp_count}/{total_jobs} ({zero_exp_count/total_jobs*100:.1f}%)")
-        
-        # Experience value distribution
-        print(f"\n  📈 Experience Value Distribution:")
-        exp_counts = df['Experience'].value_counts().head(10)
-        for exp, count in exp_counts.items():
+        platform_counts = df['Source Site'].value_counts()
+        for platform, count in platform_counts.items():
             percentage = (count/total_jobs*100)
-            print(f"     • {str(exp):8s}: {count:3d} jobs ({percentage:5.1f}%)")
-        
-        # Company statistics
-        unique_companies = df[df['Company'] != "Not Specified"]['Company'].nunique()
-        print(f"  🏢 Unique companies found: {unique_companies}")
-        
-        # Location statistics
-        unique_locations = df[df['Location'] != "Not Specified"]['Location'].nunique()
-        print(f"  📍 Unique locations found: {unique_locations}")
-        
-        # Job Type statistics
-        job_type_counts = df['Job Type'].value_counts()
-        print(f"\n  💼 Job Type Distribution:")
-        for job_type, count in job_type_counts.items():
-            percentage = (count/total_jobs*100)
-            print(f"     • {job_type:12s}: {count:3d} jobs ({percentage:5.1f}%)")
+            print(f"  {platform:15s}: {count:3d} jobs ({percentage:5.1f}%)")
     
     execution_time = (time.time() - start_time) / 60
     print("\n" + "=" * 80)
     print(f"✅ SCRAPING COMPLETED!")
     print(f"⏱️  Time: {execution_time:.2f} minutes")
     print(f"📊 Jobs: {len(all_jobs)}/{max_jobs} (target)")
+    print(f"💾 Saved to: {OUTPUT_FILE}")
     print("=" * 80)
     
     return all_jobs
 
-# Test function for experience extraction
-def test_experience_extraction():
-    """Test the enhanced experience extraction on sample data"""
-    print("🧪 TESTING ENHANCED EXPERIENCE EXTRACTION")
-    print("=" * 60)
-    
-    try:
-        ml_extractor = AdvancedMLExtractor(models_dir=MODELS_DIR)
-        print("✅ ML Extractor loaded successfully")
-    except Exception as e:
-        print(f"❌ Failed to load ML Extractor: {e}")
-        return
-    
-    # Test cases for experience extraction
-    test_cases = [
-        ("2-4 years of experience", "2-4"),
-        ("5+ years experience", "5+"),
-        ("3 years exp", "3"),
-        ("1 to 3 years", "1-3"),
-        ("7+ yrs", "7+"),
-        ("fresher", "0"),
-        ("entry level", "0-2"),
-        ("senior developer", "5+"),
-        ("junior role", "0-2"),
-        ("mid-level position", "3-5"),
-    ]
-    
-    print("\n📊 Testing Text Pattern Extraction:")
-    print("-" * 40)
-    
-    success_count = 0
-    for test_text, expected in test_cases:
-        result = ml_extractor._extract_experience_from_text_enhanced(test_text)
-        status = "✅" if result == expected else "❌"
-        print(f"{status} '{test_text}' -> '{result}' (expected: '{expected}')")
-        if result == expected:
-            success_count += 1
-    
-    accuracy = success_count/len(test_cases)*100
-    print(f"\n🎯 Pattern Extraction Accuracy: {success_count}/{len(test_cases)} ({accuracy:.1f}%)")
-
 if __name__ == "__main__":
-    # Check if we should run tests or full scraping
-    import sys
-    if len(sys.argv) > 1 and sys.argv[1] == 'test':
-        test_experience_extraction()
-    else:
-        print("🚀 Running scraper with 200 job limit...")
-        run_scraper_with_config()
+    print("🚀 Running multi-platform scraper...")
+    run_scraper_with_config()
