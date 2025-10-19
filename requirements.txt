@@ -18,3 +18,8 @@ tqdm
 pillow
 regex
 spacy
+transformers
+torch
+pillow
+torchvision 
+torchaudio
