@@ -11,7 +11,7 @@ from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import TimeoutException, NoSuchElementException
+from selenium.common.exceptions import TimeoutException, NoSuchElementException, StaleElementReferenceException
 from selenium_stealth import stealth
 from tqdm import tqdm
 import re
@@ -37,91 +37,264 @@ os.makedirs(Data_dir, exist_ok=True)
 
 # --- Job Roles ---
 job_roles = [
-    "Software Developer", "Contract DevOps Engineer", "Platform Engineer", "Python Developer", 
-    "Cloud Network Engineer", "Senior Fullstack Engineer", "Data Conversion Team Administrator", 
-    "Lead- DOT NET developer", "Content Operations Engineer", "C++ Technical Architect", 
-    "Senior SAP Project Manager", "Embedded C++ – Freelance – Consultants-Trainer", 
-    "Senior Cloud Engineer", "Dot Net Engineer", "Senior C# Developer", "Senior Android Developer", 
-    "Backend Software Engineer", "Senior Independent Software Developer", "Data Engineer", 
-    "(JDE) Developer", "Senior AI/ML Engineer", "AWS BI Architect", "AI Data Engineer designs", 
-    "Sr. Denodo Admin", "OIC PaaS developer", "ProC Developer", "Composable Commerce Architect", 
-    "Senior Windchill Developer", "Data bricks Data Engineer", "Magic XPA Subject Matter Expert", 
-    "Node.JS Developer (Backend)", "ServiceNow Developer", "Sr. Contact Center Engineer", 
-    ".NET Developer", "Senior Tableau Developer", "IT Infrastructure/Cloud area", 
-    "Cloud Technology Consultant", "Contractor - SAP Global Trade Services", 
-    "Cyber Security Engineer", "SDE I - Android Developer", "Senior Consultant- FullStack Developer", 
-    "Senior Mainframe Security Analyst", "DevOps Engineer III", "BRM Developer", 
-    "React.js + Electron.js Developer", "Oracle Integration Cloud (OIC) Developer", 
-    "Sr. Software Engineer", "MicroStrategy Architect / Developer", "AKS Cloud Engineer", 
-    "Java Full Stack Lead", "Senior MEAN Full-Stack Developers", "Senior Full Stack Software Developer", 
-    "EDI Developer", "Sr. Salesforce Engineer", "Level 2 Managed Systems Engineer", 
-    "Software Engineer (C/C++, Go)", "ETL Integration Engineer", "Salesforce Copado DevOps Engineer", 
-    "Software Engineer - SQL Databases", "Cloud Engineer", "WebFOCUS Developer", 
-    "Golang Developer", "Senior Java Software Engineer", "Technical Support Engineer", 
-    "Senior Salesforce Developer", "CCAI BOT Developer", "Full Stack Development Engineer", 
-    "Senior Node.js Engineer", "IT Helpdesk Specialist", "Integrations Engineer", 
-    "Full stack Dot Net Developer", "Salesforce CPQ Developer", "HubSpot CMS", "AEM Developer", 
-    "Python ML Developer", "Capacity Planning Engineer", "Backend Developer", "Sr CRM Developer", 
-    "UI / UX Lead", "Node Full Stack Developer", "DevOps Architect", "Cognos Developer", 
-    "SAP Developer", "Technical Curriculum Developer", "Senior Salesforce Commerce Cloud Developer", 
-    "Zoho Specialist", "BASE24/EPS/UPF Engineer", "Python Fullstack Developer", "Azure Apps Engineer", 
-    "Statistical Programmer", "Javascript Developer", "Structural Engineering", 
-    "Senior Angular Developer", "Microsoft Dynamics AX Technical Lead", "IDMC Architect", 
-    "SAP SuccessFactors Project Manager", "Frontend Engineer", ": Technical Consultant", 
-    "Senior Software Designer", "PHP Laravel Developer", "Tech Lead", "Third Party Contractor", 
-    "Back End Developer", "BI Developer", "Oracle Cloud Payroll Consultant", "EBX Architect/Senior Developer for MDM", 
-    "UI/UX Developer", "Senior Developer", "iOS Engineer", "Senior AdTech Customer Data Solution Architect", 
-    "AWS Cloud Engineers", "Global Senior Infrastructure Engineer", "UI Automation tester", 
-    "Senior Frontend/FullStack Engineer", "Mirth Connect (HL7) Developer", "Java Springboot", 
-    "Full Stack PHP Developer", "Platform Engineer Contractor", "Senior React Native Developer", 
-    "Guidewire Digital Portals", "Mid/Sr. Full Stack Engineer", "SDET", "UX Software Engineer", 
-    "SAP ABAP Developer", ": IBM TRIRIGA Developers", "Full Stack Developer (.NET/Vue)", 
-    "Senior AEM Developer", "Senior MicroStrategy Developer", "NGP Fullstack Developer", 
-    "Spark/Scala Developer", "Java Web Back End developer", "SAP Hybris Developer", 
-    "Senior iOS Developer", "Scala QA Engineer", "Artificial Intelligence Engineer", 
-    "Power BI Developer", "Data Science Engineer", "AI Developer", "React Native Developer", 
-    "Software Developer - Java", "Senior Full-Stack Developer, Java", "Sr. QA Automation Engineer", 
-    "Technical Content Developer", "MuleSoft Developer", "Sr. Java Developer", 
-    "Software Test Engineer (on site)", "React/PHP Freelancer", "Senior Software QA Engineer", 
-    "Fullstack Developer - Java, React", "Senior Data Engineer", "Java Spring MVC Developer", 
-    "Compliance Senior Analyst - Contract", "Sr. AWS DevOps Engineer", "Full Stack Engineer", 
-    "Jaspersoft Report Developer", "AI Automation & Software Engineering", 
-    "No-Code / Low-Code Systems Developer", "UI/UX Designer", "SAP Datasphere", "SAP AFS", 
-    "Informatics IDMC to PySpark", "MS Word/VBA Specialist", "SQL Experts for AI Initiative", 
-    "Web Producer", "Cloud, AI", "QA Specialist", "Ingenium Architect / BAS / Developers / SME", 
-    "BI Visualization Developer", "Senior Automation Lead", "Support Engineer", 
-    "Profisee MDM Developer", "Data Architect", ".Net Architect", "Alfabet Specialist", 
-    "Evaluation Specialist", "Java Full Stack Developer", "Senior Test Engineer", 
-    "Senior Data Architect", "SAS Solution Designer", "Developer Engagement Representative", 
-    "Technical Customer Support", "Supply Chain Management Analyst - SAP s4 Hana", 
-    "Sr. Technical Product Manager", "Denodo Architect", "CCaaS NICE Implementation Project Manager", 
-    "IFS Cloud Developer", "Drupal Frontend Developer", "Software Architect - PHP", 
-    "ServiceNow Platform Architect", "Chief Engineer", "Blockchain Developer", 
-    "Adobe Cloud Migration Developer", "Certinia Developer", "SAP ABAP Consultant", 
-    "QA Lead", "SAP APO Consultant", "Senior Rust Engineer, CDK", "MS Dynamics 365 Developer", 
-    "Localization Specialist", "Google CCAI BOT Developer", "Angular", "Python + FastAPI Developer", 
-    "Senior Salesforce Service Cloud Developer", "Network Engineer", 
-    "Oracle EBS SCM Functional Consultant", "Java Backend Developer", 
-    "AI Quality Control Coding Specialist", "CIAM Engineer", "Techno-Functional Consultant", 
-    "Senior Database Administrator", "MSD365 F&O Technical Consultant", 
-    "Documentum AWS Consultant", "Securities and Commodities Specialist", "Power BI Specialist", 
-    "L2 Security Analyst", "Freelance ServiceNow Developer", "Oracle Banking Product Developer", 
-    "Head for AI and SLM", "Software Engineer III", "Siebel CRM setup", "IC - Website Development", 
-    "Data and AI Consultant", "Customer Success Engineer", "SDE 2", "Salesforce Data Cloud Engineer", 
-    "Informatica MDM CAI Developer", "Senior Technical Architect", "PTC FlexPLM Consultant", 
-    "Middle Golang Developer", "Lead Quality Assurance (QA) Engineer", "Manual QA Specialist", 
-    "Data Architect", "Informatica Customer 360 Cloud MDM Expert", "Freelance Coding Specialists", 
-    "Azure Infrastructure Engineer", "Salesforce QA", "Senior Workday Integrations Consultant", 
-    "Azure Security Presales Architect", "SAP BI/BW Consultant", "SAP PP Consultant", 
-    "Senior DevOps Engineer with GCP", "Solutions Architect", ".Net Engineer", 
-    "People Services Specialist", "eLearning Project Manager", "Principal Consultant - Data engineering", 
-    "Sr .Net Developer", "Pharma Business Analyst", "Sourcing Consultant", "Mechanical Design Engineer", 
-    "Sap Is-u Device Mnagement", "SAP Ariba Senior Consultants", "DBA with HANA", 
-    "Senior Azure / Data Engineer", "Senior Biostatistician", "C++ Developer", "Site Reliability Engineer", 
-    "BPC Backend Consultant", "AWS Engineer"
+    "Software Developer",
+    "Contract DevOps Engineer",
+    "Platform Engineer",
+    "Python Developer",
+    "Cloud Network Engineer",
+    "Senior Fullstack Engineer",
+    "Data Conversion Team Administrator",
+    "Lead DOT NET Developer",
+    "Content Operations Engineer",
+    "C++ Technical Architect",
+    "Senior SAP Project Manager",
+    "Embedded C++ Consultant",
+    "Senior Cloud Engineer",
+    "Dot Net Engineer",
+    "Senior C# Developer",
+    "Senior Android Developer",
+    "Backend Software Engineer",
+    "Senior Independent Software Developer",
+    "Data Engineer",
+    "JDE Developer",
+    "Senior AI/ML Engineer",
+    "AWS BI Architect",
+    "AI Data Engineer",
+    "Sr. Denodo Admin",
+    "OIC PaaS Developer",
+    "ProC Developer",
+    "Composable Commerce Architect",
+    "Senior Windchill Developer",
+    "Databricks Data Engineer",
+    "Magic XPA Subject Matter Expert",
+    "Node.js Developer (Backend)",
+    "ServiceNow Developer",
+    "Sr. Contact Center Engineer",
+    ".NET Developer",
+    "Senior Tableau Developer",
+    "IT Infrastructure/Cloud Engineer",
+    "Cloud Technology Consultant",
+    "SAP Global Trade Services Consultant",
+    "Cyber Security Engineer",
+    "SDE I - Android Developer",
+    "Senior Consultant - Full Stack Developer",
+    "Senior Mainframe Security Analyst",
+    "DevOps Engineer III",
+    "BRM Developer",
+    "React.js + Electron.js Developer",
+    "Oracle Integration Cloud (OIC) Developer",
+    "Sr. Software Engineer",
+    "MicroStrategy Architect / Developer",
+    "AKS Cloud Engineer",
+    "Java Full Stack Lead",
+    "Senior MEAN Full Stack Developer",
+    "Senior Full Stack Software Developer",
+    "EDI Developer",
+    "Sr. Salesforce Engineer",
+    "Level 2 Managed Systems Engineer",
+    "Software Engineer (C/C++/Go)",
+    "ETL Integration Engineer",
+    "Salesforce Copado DevOps Engineer",
+    "Software Engineer - SQL Databases",
+    "Cloud Engineer",
+    "WebFOCUS Developer",
+    "Golang Developer",
+    "Senior Java Software Engineer",
+    "Technical Support Engineer",
+    "Senior Salesforce Developer",
+    "CCAI BOT Developer",
+    "Full Stack Development Engineer",
+    "Senior Node.js Engineer",
+    "IT Helpdesk Specialist",
+    "Integrations Engineer",
+    "Full Stack .NET Developer",
+    "Salesforce CPQ Developer",
+    "HubSpot Developer",
+    "AEM Developer",
+    "Python ML Developer",
+    "Capacity Planning Engineer",
+    "Backend Developer",
+    "Sr. CRM Developer",
+    "UI/UX Lead",
+    "Node Full Stack Developer",
+    "DevOps Architect",
+    "Cognos Developer",
+    "SAP Developer",
+    "Technical Curriculum Developer",
+    "Senior Salesforce Commerce Cloud Developer",
+    "Zoho Specialist",
+    "BASE24/UPF Engineer",
+    "Python Fullstack Developer",
+    "Azure Apps Engineer",
+    "Statistical Programmer",
+    "JavaScript Developer",
+    "Structural Engineer",
+    "Senior Angular Developer",
+    "Microsoft Dynamics AX Technical Lead",
+    "IDMC Architect",
+    "SAP SuccessFactors Project Manager",
+    "Frontend Engineer",
+    "Technical Consultant",
+    "Senior Software Designer",
+    "PHP Laravel Developer",
+    "Tech Lead",
+    "Third Party Contractor",
+    "Backend Developer",
+    "BI Developer",
+    "Oracle Cloud Payroll Consultant",
+    "EBX Architect / Senior Developer for MDM",
+    "UI/UX Developer",
+    "Senior Developer",
+    "iOS Engineer",
+    "Senior AdTech Data Solution Architect",
+    "AWS Cloud Engineer",
+    "Global Infrastructure Engineer",
+    "UI Automation Tester",
+    "Senior Frontend Engineer",
+    "Mirth Connect Developer",
+    "Java Spring Boot Developer",
+    "Full Stack PHP Developer",
+    "Platform Engineer Contractor",
+    "Senior React Native Developer",
+    "Guidewire Developer",
+    "Full Stack Engineer",
+    "SDET",
+    "UX Software Engineer",
+    "SAP ABAP Developer",
+    "IBM TRIRIGA Developer",
+    "Full Stack Developer (.NET/Vue)",
+    "Senior AEM Developer",
+    "Senior MicroStrategy Developer",
+    "NGP Fullstack Developer",
+    "Spark/Scala Developer",
+    "Java Backend Developer",
+    "SAP Hybris Developer",
+    "Senior iOS Developer",
+    "Scala QA Engineer",
+    "Artificial Intelligence Engineer",
+    "Power BI Developer",
+    "Data Science Engineer",
+    "AI Developer",
+    "React Native Developer",
+    "Senior Full-Stack Java Developer",
+    "QA Automation Engineer",
+    "Technical Content Developer",
+    "MuleSoft Developer",
+    "Java Developer",
+    "Software Test Engineer",
+    "React/PHP Developer",
+    "Senior Software QA Engineer",
+    "Fullstack Developer (Java/React)",
+    "Senior Data Engineer",
+    "Java Spring MVC Developer",
+    "Compliance Analyst - Contract",
+    "AWS DevOps Engineer",
+    "Jaspersoft Developer",
+    "AI Automation Engineer",
+    "Low-Code / No-Code Developer",
+    "UI/UX Designer",
+    "SAP Datasphere Engineer",
+    "SAP AFS Consultant",
+    "Informatica IDMC Spark Engineer",
+    "MS Word/VBA Specialist",
+    "SQL Expert (AI Initiative)",
+    "Web Producer",
+    "Cloud/AI Specialist",
+    "QA Specialist",
+    "Ingenium Architect / Developer",
+    "BI Visualization Developer",
+    "Senior Automation Lead",
+    "Support Engineer",
+    "Profisee MDM Developer",
+    "Data Architect",
+    ".NET Architect",
+    "Alfabet Specialist",
+    "Evaluation Specialist",
+    "Java Full Stack Developer",
+    "Senior Test Engineer",
+    "SAS Solution Designer",
+    "Developer Engagement Representative",
+    "Technical Customer Support Engineer",
+    "Supply Chain Analyst - SAP S/4Hana",
+    "Technical Product Manager",
+    "Denodo Architect",
+    "CCaaS NICE Implementation Manager",
+    "IFS Cloud Developer",
+    "Drupal Frontend Developer",
+    "Software Architect - PHP",
+    "ServiceNow Platform Architect",
+    "Chief Engineer",
+    "Blockchain Developer",
+    "Adobe Migration Developer",
+    "Certinia Developer",
+    "SAP Consultant",
+    "QA Lead",
+    "SAP APO Consultant",
+    "Rust Engineer (CDK)",
+    "MS Dynamics 365 Developer",
+    "Localization Specialist",
+    "Google CCAI BOT Developer",
+    "Angular Developer",
+    "Python FastAPI Developer",
+    "Salesforce Service Cloud Developer",
+    "Network Engineer",
+    "Oracle EBS SCM Consultant",
+    "AI Quality Control Engineer",
+    "CIAM Engineer",
+    "Techno-Functional Consultant",
+    "Database Administrator",
+    "MSD365 F&O Consultant",
+    "Documentum AWS Consultant",
+    "Securities and Commodities Specialist",
+    "Power BI Specialist",
+    "Security Analyst (L2)",
+    "Freelance ServiceNow Developer",
+    "Oracle Banking Product Developer",
+    "Head of AI and SLM",
+    "Software Engineer III",
+    "Siebel CRM Developer",
+    "Website Development Engineer",
+    "Data & AI Consultant",
+    "Customer Success Engineer",
+    "Software Development Engineer 2 (SDE 2)",
+    "Salesforce Data Cloud Engineer",
+    "Informatica MDM CAI Developer",
+    "Technical Architect",
+    "PTC FlexPLM Consultant",
+    "Golang Developer (Intermediate)",
+    "QA Engineer Lead",
+    "Manual QA Specialist",
+    "Informatica Customer 360 Expert",
+    "Freelance Developer",
+    "Azure Infrastructure Engineer",
+    "Salesforce QA Engineer",
+    "Workday Integrations Consultant",
+    "Azure Security Architect",
+    "SAP BI/BW Consultant",
+    "SAP PP Consultant",
+    "DevOps Engineer (GCP)",
+    "Solutions Architect",
+    "People Services Specialist",
+    "eLearning Project Manager",
+    "Principal Consultant - Data Engineering",
+    "Senior .NET Developer",
+    "Pharma Business Analyst",
+    "Sourcing Consultant",
+    "Mechanical Design Engineer",
+    "SAP IS-U Consultant",
+    "SAP Ariba Consultant",
+    "DBA (HANA)",
+    "Azure Data Engineer",
+    "Biostatistician",
+    "C Developer",
+    "Site Reliability Engineer",
+    "BPC Backend Consultant",
+    "AWS Engineer"
 ]
 
-# --- Stealth Selenium Setup ---
+
+seen_job_links = set()
+
 def create_stealth_driver():
     """Create a selenium driver with stealth settings"""
     options = Options()
@@ -253,8 +426,168 @@ def filter_experience(exp_text):
 
     return False
 
+# --- Helper Functions ---
+def find_and_click_next_button(driver, role, page):
+    """Click numbered pagination links (2 through 10) for Shine"""
+    if page >= 10:
+        logging.info(f"Reached maximum page limit (10) for {role}")
+        return False
+    
+    # Target numbered pagination links
+    page_selectors = [
+        f"//a[contains(@class, 'pagination') and text()='{page + 1}']",  # Direct page number (e.g., "2")
+        f"//a[contains(@class, 'cls_pagination') and text()='{page + 1}']",  # Shine-specific class
+        f"//a[contains(@href, 'page={page + 1}')]",  # Links with page number in href
+        f"//li[contains(@class, 'pagination') or contains(@class, 'cls_pagination')]//a[text()='{page + 1}']",
+        f"//div[contains(@class, 'pagination')]//a[text()='{page + 1}']",
+    ]
+    
+    try:
+        # Scroll to bottom to ensure pagination elements are loaded
+        driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+        time.sleep(random.uniform(1.5, 2.5))
+        
+        for selector in page_selectors:
+            try:
+                # Wait for the page number link to be present
+                page_link = WebDriverWait(driver, 10).until(
+                    EC.presence_of_element_located((By.XPATH, selector))
+                )
+                logging.info(f"Found page {page + 1} link with selector: {selector}")
+                
+                # Check if link is clickable
+                if page_link.is_displayed() and page_link.is_enabled():
+                    # Get current state to detect page change
+                    old_url = driver.current_url
+                    old_page_source = driver.page_source[:1000]
+                    
+                    # Scroll to link and click
+                    driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", page_link)
+                    time.sleep(random.uniform(0.5, 1))
+                    driver.execute_script("arguments[0].click();", page_link)
+                    
+                    # Wait for page change
+                    WebDriverWait(driver, 15).until(
+                        lambda d: d.current_url != old_url or d.page_source[:1000] != old_page_source
+                    )
+                    logging.info(f"Successfully clicked page {page + 1} link for {role}")
+                    return True
+                else:
+                    logging.warning(f"Page {page + 1} link found but not clickable: {selector}")
+            
+            except (TimeoutException, NoSuchElementException, StaleElementReferenceException) as e:
+                logging.debug(f"Selector {selector} for page {page + 1} failed: {str(e)}")
+                continue
+        
+        # Fallback: Try constructing pagination URL
+        logging.info(f"No clickable page {page + 1} link found for {role}. Attempting URL-based pagination.")
+        current_url = driver.current_url
+        next_page = page + 1
+        if 'page=' in current_url:
+            next_url = re.sub(r'page=\d+', f'page={next_page}', current_url)
+        else:
+            separator = '&' if '?' in current_url else '?'
+            next_url = f"{current_url}{separator}page={next_page}"
+        
+        try:
+            driver.get(next_url)
+            WebDriverWait(driver, 15).until(
+                EC.presence_of_element_located((By.CSS_SELECTOR, "div[class*='jobCard'], li[class*='job'], article, [data-job-id]"))
+            )
+            logging.info(f"Successfully navigated to page {next_page} for {role} using URL: {next_url}")
+            return True
+        except Exception as e:
+            logging.warning(f"URL-based pagination failed for {next_url}: {e}")
+        
+        # Fallback: Try infinite scroll
+        logging.info(f"No page {page + 1} link or URL worked for {role}. Attempting infinite scroll.")
+        scroll_height = driver.execute_script("return document.body.scrollHeight")
+        driver.execute_script(f"window.scrollTo(0, {scroll_height});")
+        time.sleep(random.uniform(2, 4))
+        new_scroll_height = driver.execute_script("return document.body.scrollHeight")
+        if new_scroll_height > scroll_height:
+            logging.info(f"Infinite scroll triggered new content for {role} on page {page}")
+            return True
+        
+        logging.info(f"No page {page + 1} found for {role}")
+        return False
+    
+    except Exception as e:
+        logging.error(f"Error in find_and_click_next_button for {role} on page {page}: {e}")
+        return False
+    
+    
+def click_numbered_page(driver, role, target_page):
+    """Use direct URL pattern for pagination - this is the most reliable method"""
+    try:
+        current_url = driver.current_url
+        logging.info(f"Current URL: {current_url}")
+        
+        # Clean the current URL first - remove any existing page parameters
+        clean_url = re.sub(r'[?&]page=\d+', '', current_url)
+        clean_url = re.sub(r'-jobs-\d+', '', clean_url)
+        clean_url = re.sub(r'/jobs/\d+', '', clean_url)
+        
+        # Remove double ? or & characters
+        clean_url = re.sub(r'\?&', '?', clean_url)
+        clean_url = re.sub(r'&&', '&', clean_url)
+        clean_url = clean_url.rstrip('?&')
+        
+        # Construct the new URL with the target page
+        # Try multiple URL patterns that Shine.com uses
+        url_patterns = [
+            f"{clean_url}-jobs-{target_page}",
+            f"{clean_url}/jobs/{target_page}",
+            f"{clean_url}?page={target_page}",
+            f"{clean_url}&page={target_page}"
+        ]
+        
+        for new_url in url_patterns:
+            try:
+                logging.info(f"Trying URL pattern: {new_url}")
+                driver.get(new_url)
+                
+                # Wait for page to load completely
+                WebDriverWait(driver, 20).until(
+                    EC.presence_of_element_located((By.CSS_SELECTOR, "body"))
+                )
+                
+                # Wait for job cards specifically
+                WebDriverWait(driver, 15).until(
+                    EC.presence_of_element_located((By.CSS_SELECTOR, "div[class*='jobCard'], li[class*='job'], article, [data-job-id]"))
+                )
+                
+                # Verify we're on a different page by checking URL
+                current_url_after = driver.current_url
+                logging.info(f"URL after navigation: {current_url_after}")
+                
+                # Check if page number appears in the new URL
+                if (str(target_page) in current_url_after or 
+                    f'page={target_page}' in current_url_after or
+                    f'-jobs-{target_page}' in current_url_after):
+                    logging.info(f"✓ Successfully navigated to page {target_page}")
+                    time.sleep(random.uniform(3, 5))
+                    return True
+                else:
+                    # Even if URL doesn't show page number, check if content changed
+                    logging.info(f"Page number not in URL, but navigation completed")
+                    time.sleep(random.uniform(3, 5))
+                    return True
+                    
+            except Exception as e:
+                logging.warning(f"URL pattern failed: {new_url} - {e}")
+                continue
+        
+        logging.error(f"All URL patterns failed for page {target_page}")
+        return False
+        
+    except Exception as e:
+        logging.error(f"URL pagination failed for page {target_page}: {e}")
+        return False
+    
+
 def handle_captcha(driver, max_attempts=3):
-    """Detect and handle CAPTCHA by clicking checkbox and prompting for manual intervention if needed"""
+    """Detect and handle CAPTCHA with improved logic"""
     for attempt in range(max_attempts):
         try:
             captcha_elements = driver.find_elements(By.CSS_SELECTOR, ".cf-turnstile, iframe[src*='recaptcha'], div[class*='g-recaptcha']")
@@ -263,7 +596,6 @@ def handle_captcha(driver, max_attempts=3):
                 return True
 
             logging.info(f"CAPTCHA detected on attempt {attempt + 1}")
-
             screenshot_path = os.path.join(Data_dir, f"captcha_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png")
             driver.save_screenshot(screenshot_path)
             logging.info(f"Saved CAPTCHA screenshot: {screenshot_path}")
@@ -271,17 +603,23 @@ def handle_captcha(driver, max_attempts=3):
             time.sleep(random.uniform(1.5, 2.5))
 
             try:
+                # Try clicking CAPTCHA checkbox
                 checkbox = WebDriverWait(driver, 10).until(
                     EC.element_to_be_clickable((By.CSS_SELECTOR, "input[type='checkbox'][id*='recaptcha'], div[class*='recaptcha-checkbox']"))
                 )
                 ActionChains(driver).move_to_element(checkbox).click().perform()
                 logging.info("Clicked reCAPTCHA checkbox")
+                time.sleep(4)
+
+                # Check if CAPTCHA is resolved
+                captcha_elements = driver.find_elements(By.CSS_SELECTOR, ".cf-turnstile, iframe[src*='recaptcha'], div[class*='g-recaptcha']")
+                if not captcha_elements:
+                    logging.info("CAPTCHA resolved after checkbox click")
+                    return True
             except TimeoutException:
                 logging.warning("Could not find clickable reCAPTCHA checkbox")
-                return False
 
-            time.sleep(4)
-
+            # Check for image-based CAPTCHA
             try:
                 challenge_iframe = driver.find_element(By.CSS_SELECTOR, "iframe[title*='challenge']")
                 logging.warning("CAPTCHA escalated to image challenge")
@@ -289,7 +627,7 @@ def handle_captcha(driver, max_attempts=3):
                 input("Solve CAPTCHA manually and press Enter to continue...")
                 return False
             except NoSuchElementException:
-                logging.info("CAPTCHA likely resolved after checkbox click")
+                logging.info("No image-based CAPTCHA detected")
                 return True
 
         except Exception as e:
@@ -301,7 +639,40 @@ def handle_captcha(driver, max_attempts=3):
 
     return False
 
-# --- Shine Scraper ---
+def is_duplicate_job(job_link):
+    """Check if job link has already been processed with relaxed normalization"""
+    if not job_link:
+        return True
+    
+    # Normalize by removing query parameters and trailing slashes
+    normalized_link = re.sub(r'\?.*$', '', job_link.strip().lower()).rstrip('/')
+    if normalized_link in seen_job_links:
+        return True
+    
+    seen_job_links.add(normalized_link)
+    return False
+
+
+def extract_salary_text(text):
+    """Extract and normalize salary data from given raw text."""
+    if not text:
+        return "Not Disclosed"
+    
+    text = text.strip()
+    patterns = [
+        r"\₹?\s?[\d,\.]+(?:\s?[-–to]+\s?[\d,\.]+)?\s?(?:LPA|PA|per annum|lakhs|lakh|k|K|₹)?",  # e.g. ₹8L - ₹18L PA, 10-15 LPA, 5,00,000 - 8,00,000
+        r"\$[\d,\.]+(?:\s?[-–to]+\s?[\d,\.]+)?\s?(?:per year|per annum|yearly)?",             # e.g. $50,000 - $70,000 per year
+        r"[\d,\.]+\s?(?:to|[-–])\s?[\d,\.]+\s?(?:USD|INR|EUR|GBP|AED)?",
+    ]
+    
+    for pattern in patterns:
+        match = re.search(pattern, text, re.IGNORECASE)
+        if match:
+            return match.group(0)
+    
+    return text
+
+
 def scrape_shine():
     """Scrape ALL jobs from Shine for each job role (unlimited)"""
     logging.info("Starting unlimited Shine scraping")
@@ -314,20 +685,25 @@ def scrape_shine():
             print(f"\n--- Scraping role {role_idx + 1}/{len(job_roles)}: {role} ---")
             query = requests.utils.quote(role.replace('/', '-').replace(':', ''))
             base_url = f"https://www.shine.com/job-search/{query}-jobs"
-            driver.get(base_url)
-            time.sleep(random.uniform(6, 10))
             
+            driver.get(base_url)
+            time.sleep(random.uniform(8, 12))
+            
+            # Handle initial pop-ups
             try:
                 close_selectors = [
-                    "button[aria-label='Close']", ".closeBtn", "[data-testid='modal-close']", "button[id*='reject']",
-                    "button[id*='accept']", ".gdpr-consent-button", ".modal-close"
+                    "button[aria-label='Close']", ".closeBtn", "[data-testid='modal-close']", 
+                    "button[id*='reject']", "button[id*='accept']", ".gdpr-consent-button", 
+                    ".modal-close", ".close-icon", ".popup-close"
                 ]
                 for selector in close_selectors:
                     try:
-                        close_btn = driver.find_element(By.CSS_SELECTOR, selector)
+                        close_btn = WebDriverWait(driver, 5).until(
+                            EC.element_to_be_clickable((By.CSS_SELECTOR, selector))
+                        )
                         driver.execute_script("arguments[0].click();", close_btn)
                         time.sleep(2)
-                        logging.info(f"Closed element with selector: {selector}")
+                        logging.info(f"Closed pop-up with selector: {selector}")
                         break
                     except:
                         continue
@@ -341,86 +717,150 @@ def scrape_shine():
                 continue
             
             page = 1
-            max_pages = 100  # Set a high limit instead of stopping at 50 jobs
+            max_pages = 25
             role_jobs_count = 0
+            consecutive_duplicate_pages = 0
+            max_consecutive_duplicates = 3
             
-            with tqdm(desc=f"Shine Jobs ({role[:30]}...)", unit="jobs") as pbar:
-                while page <= max_pages:
-                    retries = 5
-                    cards_found = False
+            with tqdm(desc=f"Shine {role[:20]}...", unit="job") as pbar:
+                while page <= max_pages and consecutive_duplicate_pages < max_consecutive_duplicates:
+                    retries = 3
+                    page_success = False
                     
                     for attempt in range(retries):
                         try:
-                            job_card_selectors = [
-                                (By.CSS_SELECTOR, "div[class*='jobCard']"),
-                                (By.CSS_SELECTOR, "li[class*='job']"),
-                                (By.CSS_SELECTOR, "div[id*='job']"),
-                                (By.CSS_SELECTOR, "div[data-job-id]"),
-                                (By.TAG_NAME, "article")
-                            ]
+                            # Check for CAPTCHA on each page
+                            if not handle_captcha(driver):
+                                logging.error(f"CAPTCHA detected on page {page} for {role}. Skipping role.")
+                                break
                             
-                            cards_found = False
-                            for by, selector in job_card_selectors:
-                                try:
-                                    WebDriverWait(driver, 30).until(
-                                        EC.presence_of_all_elements_located((by, selector))
-                                    )
-                                    cards_found = True
-                                    logging.info(f"Found job cards using selector: {selector}")
-                                    break
-                                except:
-                                    continue
+                            # Wait for job cards
+                            WebDriverWait(driver, 10).until(
+                                EC.presence_of_element_located((By.CSS_SELECTOR, "div[class*='jobCard'], li[class*='job'], article, [data-job-id]"))
+                            )
                             
-                            if not cards_found:
-                                logging.error(f"Attempt {attempt + 1}/{retries}: No job cards found for {role}")
-                                if attempt == retries - 1:
-                                    screenshot_path = os.path.join(Data_dir, f"shine_timeout_{role}_page_{page}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png")
-                                    driver.save_screenshot(screenshot_path)
-                                    logging.info(f"Saved screenshot: {screenshot_path}")
-                                    print(f"Saved screenshot: {screenshot_path}")
-                                    break
+                            # Scroll to load content
+                            driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+                            time.sleep(2)
+                            driver.execute_script("window.scrollTo(0, 0);")
+                            time.sleep(1)
                             
                             soup = BeautifulSoup(driver.page_source, 'html.parser')
-                            job_cards = soup.find_all('div', {'class': lambda x: x and 'jobCard' in str(x)}) or \
-                                        soup.find_all('li', {'class': lambda x: x and 'job' in str(x).lower()}) or \
-                                        soup.find_all('div', {'id': lambda x: x and x.startswith('job')}) or \
-                                        soup.find_all('div', attrs={'data-job-id': True}) or \
-                                        soup.find_all('article')
+                            
+                            job_cards = (
+                                soup.find_all('div', {'class': lambda x: x and 'jobCard' in str(x)}) or
+                                soup.find_all('li', {'class': lambda x: x and 'job' in str(x).lower()}) or
+                                soup.find_all('div', {'id': lambda x: x and 'job' in str(x).lower()}) or
+                                soup.find_all('div', attrs={'data-job-id': True}) or
+                                soup.find_all('article') or
+                                []
+                            )
                             
                             logging.info(f"Found {len(job_cards)} job cards for {role} on page {page}")
+                            
                             if not job_cards:
+                                logging.info(f"No job cards found on page {page} for {role}")
+                                consecutive_duplicate_pages += 1
                                 break
                             
                             page_jobs_count = 0
+                            page_duplicate_count = 0
+                            page_new_jobs = 0
+                            
                             for card in job_cards:
                                 try:
-                                    title_elem = card.find('h2') or card.find('h3') or \
-                                                 card.find('a', {'class': lambda x: x and 'title' in str(x).lower()}) or \
-                                                 card.find('strong') or card.find('b')
+                                    title_elem = (
+                                        card.find('h2') or card.find('h3') or 
+                                        card.find('a', {'class': lambda x: x and 'title' in str(x).lower()}) or
+                                        card.find('strong') or card.find('b') or
+                                        card.find('span', {'class': lambda x: x and 'title' in str(x).lower()})
+                                    )
                                     job_title = title_elem.get_text(strip=True) if title_elem else ''
+                                    
                                     if not job_title or len(job_title) < 3:
                                         continue
                                     
                                     link_elem = card.find('a', href=True)
-                                    job_link = f"https://www.shine.com{link_elem['href']}" if link_elem and link_elem.get('href').startswith('/') else link_elem.get('href', '') if link_elem else ''
+                                    job_link = ''
+                                    if link_elem:
+                                        href = link_elem.get('href', '')
+                                        if href.startswith('/'):
+                                            job_link = f"https://www.shine.com{href}"
+                                        elif href.startswith('http'):
+                                            job_link = href
                                     
-                                    company_elem = None
-                                    for tag, attrs in [
+                                    if is_duplicate_job(job_link):
+                                        page_duplicate_count += 1
+                                        continue
+                                    
+                                    company_name = 'Not specified'
+                                    company_selectors = [
                                         ('div', {'class': lambda x: x and 'company' in str(x).lower()}),
                                         ('span', {'class': lambda x: x and 'company' in str(x).lower()}),
                                         ('a', {'class': lambda x: x and 'company' in str(x).lower()}),
                                         ('p', {'class': lambda x: x and 'company' in str(x).lower()}),
-                                    ]:
+                                    ]
+                                    
+                                    for tag, attrs in company_selectors:
                                         company_elem = card.find(tag, attrs)
                                         if company_elem and company_elem.get_text(strip=True):
+                                            company_name = company_elem.get_text(strip=True)
                                             break
-                                    company_name = company_elem.get_text(strip=True) if company_elem else 'Not specified'
                                     
-                                    salary_elem = card.find('span', class_=lambda x: x and 'salary' in str(x).lower())
-                                    salary = salary_elem.get_text(strip=True) if salary_elem else 'Not Disclosed'
+                                    # FIXED: Better salary extraction for Shine
+                                    salary = "Not Disclosed"
+                                    salary_selectors = [
+                                        ('li', {'class': lambda x: x and 'salary' in str(x).lower()}),
+                                        ('div', {'class': lambda x: x and 'salary' in str(x).lower()}),
+                                        ('span', {'class': lambda x: x and 'salary' in str(x).lower()}),
+                                        ('div', {'class': 'salaryRange'}),
+                                        ('span', {'class': 'salaryRange'}),
+                                        ('div', {'class': lambda x: x and 'package' in str(x).lower()}),
+                                    ]
                                     
-                                    date_elem = card.find('span', class_=lambda x: x and 'date' in str(x).lower())
-                                    date_posted = clean_date_posted(date_elem.get_text(strip=True) if date_elem else '')
+                                    for tag, attrs in salary_selectors:
+                                        salary_elem = card.find(tag, attrs)
+                                        if salary_elem:
+                                            raw_salary = salary_elem.get_text(strip=True)
+                                            if raw_salary and 'lpa' in raw_salary.lower():
+                                                salary = extract_salary_text(raw_salary)
+                                                break
+                                    
+                                    # FIXED: Better date posted extraction for Shine
+                                    date_posted = 'Not specified'
+                                    date_selectors = [
+                                        ('li', {'class': lambda x: x and 'time' in str(x).lower()}),
+                                        ('div', {'class': lambda x: x and 'time' in str(x).lower()}),
+                                        ('span', {'class': lambda x: x and 'time' in str(x).lower()}),
+                                        ('div', {'class': lambda x: x and 'date' in str(x).lower()}),
+                                        ('span', {'class': lambda x: x and 'date' in str(x).lower()}),
+                                        ('time', {}),  # HTML5 time element
+                                        ('div', {'class': 'jobAge'}),
+                                        ('span', {'class': 'jobAge'}),
+                                    ]
+                                    
+                                    for tag, attrs in date_selectors:
+                                        date_elem = card.find(tag, attrs)
+                                        if date_elem:
+                                            date_text = date_elem.get_text(strip=True)
+                                            if date_text and any(keyword in date_text.lower() for keyword in ['day', 'hour', 'week', 'month', 'ago', 'today', 'yesterday']):
+                                                date_posted = clean_date_posted(date_text)
+                                                break
+                                    
+                                    # Alternative: Extract from card text if specific elements not found
+                                    card_text = card.get_text(strip=True)
+                                    
+                                    # If salary not found, try to extract from card text
+                                    if salary == "Not Disclosed":
+                                        salary_match = re.search(r'₹?\s?[\d,\.]+\s?[-–to]+\s?[\d,\.]+\s?(?:LPA|Lakh|Lac|PA|per annum)', card_text, re.IGNORECASE)
+                                        if salary_match:
+                                            salary = extract_salary_text(salary_match.group(0))
+                                    
+                                    # If date not found, try to extract from card text
+                                    if date_posted == 'Not specified':
+                                        date_match = re.search(r'(\d+\s*(?:day|days|hour|hours|week|weeks|month|months)\s*ago|today|yesterday|\d+[dDhH])', card_text, re.IGNORECASE)
+                                        if date_match:
+                                            date_posted = clean_date_posted(date_match.group(1))
                                     
                                     experience = extract_experience_enhanced(card.get_text(strip=True))
                                     
@@ -433,59 +873,67 @@ def scrape_shine():
                                             'salary': salary,
                                             'date_posted': date_posted
                                         }
-                                        # Avoid duplicates
-                                        if job_data not in all_jobs:
-                                            all_jobs.append(job_data)
-                                            role_jobs_count += 1
-                                            page_jobs_count += 1
-                                            pbar.update(1)
-                                            logging.info(f"Collected job: {job_title} at {company_name} (Experience: {experience})")
-                                    else:
-                                        logging.debug(f"Skipped job: {job_title} due to experience filter: {experience}")
+                                        
+                                        all_jobs.append(job_data)
+                                        role_jobs_count += 1
+                                        page_jobs_count += 1
+                                        page_new_jobs += 1
+                                        pbar.update(1)
+                                        logging.info(f"Collected: {job_title} | {company_name} | Salary: {salary} | Posted: {date_posted}")
                                     
                                 except Exception as e:
-                                    logging.error(f"Error parsing job card for {role}: {e}")
+                                    logging.error(f"Error parsing job card: {e}")
                                     continue
                             
-                            print(f"Page {page}: Collected {page_jobs_count} jobs (Total for {role}: {role_jobs_count})")
-                            
-                            if page_jobs_count == 0 and page > 1:
-                                logging.info(f"No new jobs found on page {page} for {role}. Stopping pagination.")
-                                break
-                            
-                            # Pagination
-                            next_button = None
-                            for selector in ["//a[contains(@class, 'next')]", "//button[contains(text(), 'Next')]", "//a[contains(@title, 'Next')]"]:
-                                try:
-                                    next_button = driver.find_element(By.XPATH, selector)
-                                    if next_button.is_displayed() and next_button.is_enabled():
-                                        break
-                                    next_button = None
-                                except:
-                                    continue
-                            
-                            if next_button:
-                                old_html = driver.page_source
-                                driver.execute_script("arguments[0].click();", next_button)
-                                WebDriverWait(driver, 30).until(lambda d: d.page_source != old_html)
-                                time.sleep(random.uniform(6, 10))
-                                page += 1
-                                logging.info(f"Moving to Shine page {page} for {role}")
+                            if page_new_jobs == 0:
+                                consecutive_duplicate_pages += 1
                             else:
-                                logging.info(f"No next button found for {role} on page {page}")
+                                consecutive_duplicate_pages = 0
+                            
+                            print(f"Page {page}: {page_new_jobs} new, {page_duplicate_count} duplicates (Total: {role_jobs_count})")
+                            
+                            if consecutive_duplicate_pages >= max_consecutive_duplicates:
+                                logging.info(f"Stopping {role} - {consecutive_duplicate_pages} consecutive duplicate pages")
                                 break
                             
+                            # Move to next page using URL-based pagination
+                            if page < max_pages:
+                                time.sleep(random.uniform(3, 5))
+                                next_page = page + 1
+                                
+                                # Use the improved URL-based pagination
+                                if click_numbered_page(driver, role, next_page):
+                                    page = next_page
+                                    page_success = True
+                                    logging.info(f"Successfully moved to page {page} for {role}")
+                                    break
+                                else:
+                                    logging.info(f"Pagination failed for {role} after page {page}")
+                                    break
+                            
+                            page_success = True
                             break
+                            
                         except TimeoutException as e:
-                            logging.warning(f"Attempt {attempt + 1}/{retries}: Timeout for {role} on page {page}: {e}")
+                            logging.warning(f"Attempt {attempt + 1}/{retries}: Timeout on page {page}: {e}")
                             if attempt < retries - 1:
                                 time.sleep(random.uniform(10, 15))
-                            continue
+                                driver.refresh()
+                                time.sleep(5)
+                            else:
+                                break
+                        except Exception as e:
+                            logging.error(f"Error on page {page}: {e}")
+                            if attempt < retries - 1:
+                                time.sleep(random.uniform(10, 15))
+                            else:
+                                break
                     
-                    if not cards_found or page > max_pages:
+                    if not page_success:
                         break
+                    time.sleep(random.uniform(5, 8))
                         
-            print(f"✓ Collected {role_jobs_count} jobs for {role}")
+            print(f"✓ Finished {role}: {role_jobs_count} jobs")
             time.sleep(random.uniform(10, 15))
             
     except Exception as e:
@@ -493,12 +941,11 @@ def scrape_shine():
         print(f"Error scraping Shine: {e}")
     finally:
         driver.quit()
-        logging.info(f"Collected {len(all_jobs)} jobs from Shine")
-        print(f"✓ Total collected {len(all_jobs)} jobs from Shine")
+        logging.info(f"Collected {len(all_jobs)} unique jobs from Shine")
+        print(f"✓ Total collected {len(all_jobs)} unique jobs from Shine")
     
     return all_jobs
 
-# --- Foundit Scraper ---
 def scrape_foundit():
     """Scrape ALL jobs from Foundit for each job role (unlimited)"""
     logging.info("Starting unlimited Foundit scraping")
@@ -513,157 +960,203 @@ def scrape_foundit():
             base_url = f"https://www.foundit.in/srp/results?query={query}"
             
             driver.get(base_url)
-            time.sleep(random.uniform(10, 15))
+            time.sleep(random.uniform(5,7))
             
-            # Handle pop-ups
-            try:
-                popup_selectors = [
-                    "button[class*='close']",
-                    "button[aria-label*='Close']", 
-                    ".close",
-                    "button[class*='accept']",
-                    "button[class*='agree']"
-                ]
-                for selector in popup_selectors:
-                    try:
-                        close_btn = driver.find_element(By.CSS_SELECTOR, selector)
-                        driver.execute_script("arguments[0].click();", close_btn)
-                        time.sleep(2)
-                        logging.info(f"Closed pop-up with selector: {selector}")
-                        break
-                    except:
-                        continue
-            except Exception as e:
-                logging.warning(f"Failed to handle pop-up on Foundit: {e}")
+            # Quick pop-up handling
+            popup_selectors = [
+                "button[class*='close']", "button[aria-label*='Close']", ".close",
+                "button[class*='accept']", "button[class*='agree']", ".popup-close",
+                "button[class*='close']", 
+                "button[aria-label*='Close']", 
+                ".close",
+                "button[class*='accept']", 
+                "button[class*='agree']", 
+                ".popup-close",
+                "button[class*='okay']",
+                "button[class*='ok']",
+                "button:contains('Okay')",
+                "button:contains('OK')",
+                "button:contains('Ok')",
+                "//button[contains(text(), 'Okay')]",
+                "//button[contains(text(), 'OK')]",
+                "//button[contains(text(), 'Ok')]"
+            ]
+            for selector in popup_selectors:
+                try:
+                    close_btn = driver.find_element(By.CSS_SELECTOR, selector)
+                    driver.execute_script("arguments[0].click();", close_btn)
+                    time.sleep(1)
+                    break
+                except:
+                    continue
             
             page = 1
-            max_pages = 100  # Set a high limit
+            max_pages = 25
             role_jobs_count = 0
+            consecutive_empty_pages = 0
+            max_consecutive_empty = 2
             
-            with tqdm(desc=f"Foundit Jobs ({role[:30]}...)", unit="jobs") as pbar:
-                while page <= max_pages:
-                    retries = 3
-                    for attempt in range(retries):
-                        try:
-                            # Wait for job cards to load
-                            WebDriverWait(driver, 20).until(
-                                EC.presence_of_element_located((By.CSS_SELECTOR, "div.cardContainer, div[class*='job-card'], [data-job-id]"))
-                            )
-                            
-                            # Scroll to load all content
-                            for i in range(5):
-                                driver.execute_script(f"window.scrollTo(0, {1000 * (i + 1)});")
-                                time.sleep(random.uniform(1, 2))
-                            
-                            time.sleep(random.uniform(3, 5))
-                            
-                            soup = BeautifulSoup(driver.page_source, 'html.parser')
-                            
-                            # Find job cards
-                            job_cards = soup.find_all('div', class_='cardContainer')
-                            if not job_cards:
-                                job_cards = soup.find_all('div', attrs={'data-job-id': True})
-                            if not job_cards:
-                                job_cards = soup.find_all('div', class_=lambda x: x and 'job' in str(x).lower() and 'card' in str(x).lower())
-                            
-                            logging.info(f"Found {len(job_cards)} job cards on Foundit page {page}")
-                            
-                            if not job_cards:
-                                logging.info("No more jobs found on Foundit")
-                                break
-                            
-                            page_jobs_count = 0
-                            for card in job_cards:
-                                try:
-                                    # 1. JOB TITLE
-                                    job_title = ''
-                                    title_elem = card.find('div', class_='jobTitle')
-                                    if title_elem:
-                                        job_title = title_elem.get_text(strip=True)
+            with tqdm(desc=f"Foundit {role[:15]}...", unit="job") as pbar:
+                while page <= max_pages and consecutive_empty_pages < max_consecutive_empty:
+                    try:
+                        # Quick CAPTCHA check
+                        captcha_elements = driver.find_elements(By.CSS_SELECTOR, ".cf-turnstile, iframe[src*='recaptcha']")
+                        if captcha_elements:
+                            logging.warning("CAPTCHA detected - skipping role")
+                            break
+                        
+                        # Wait for job cards
+                        WebDriverWait(driver, 15).until(
+                            EC.presence_of_element_located((By.CSS_SELECTOR, "div.cardContainer, [data-job-id]"))
+                        )
+                        
+                        # Single efficient scroll
+                        driver.execute_script("window.scrollTo(0, document.body.scrollHeight * 0.7);")
+                        time.sleep(1.5)
+                        
+                        soup = BeautifulSoup(driver.page_source, 'html.parser')
+                        
+                        # Focus on main job card selector
+                        job_cards = soup.find_all('div', class_='cardContainer')
+                        if not job_cards:
+                            job_cards = soup.find_all('div', attrs={'data-job-id': True})
+                        
+                        logging.info(f"Found {len(job_cards)} job cards on page {page}")
+                        
+                        if not job_cards:
+                            consecutive_empty_pages += 1
+                            break
+                        
+                        page_new_jobs = 0
+                        
+                        for card in job_cards:
+                            try:
+                                # Quick title extraction
+                                title_elem = card.find('div', class_='jobTitle')
+                                job_title = title_elem.get_text(strip=True) if title_elem else ''
+                                
+                                if not job_title or len(job_title) < 3:
+                                    continue
+                                
+                                # Quick job link extraction
+                                job_link = ''
+                                job_id = card.get('id')
+                                if job_id and job_id.isdigit():
+                                    job_link = f"https://www.foundit.in/job/{job_id}"
+                                else:
+                                    job_id_elem = card.find(attrs={'data-job-id': True})
+                                    if job_id_elem:
+                                        job_id = job_id_elem.get('data-job-id')
+                                        if job_id and job_id.isdigit():
+                                            job_link = f"https://www.foundit.in/job/{job_id}"
+                                
+                                if is_duplicate_job(job_link):
+                                    continue
+                                
+                                # Quick company extraction
+                                company_name = 'Not specified'
+                                company_elem = card.find('div', class_='companyName')
+                                if company_elem:
+                                    company_name = company_elem.get_text(strip=True)
+                                
+                                # Quick experience extraction
+                                experience = '0'
+                                card_body = card.find('div', class_='cardBody')
+                                if card_body:
+                                    # Check experience section first
+                                    exp_section = card_body.find('div', class_='experienceSalary')
+                                    if exp_section:
+                                        exp_elem = exp_section.find('span', class_='details')
+                                        if exp_elem:
+                                            experience = extract_experience_enhanced(exp_elem.get_text(strip=True))
                                     
-                                    if not job_title or len(job_title) < 3:
-                                        continue
-                                    
-                                    # 2. JOB LINK - FIXED: Construct from job ID
-                                    job_link = ''
-                                    job_id = card.get('id')  # Get the ID from cardContainer
-                                    
-                                    if job_id and job_id.isdigit():
-                                        # Construct job URL using the ID
-                                        job_link = f"https://www.foundit.in/job/{job_id}"
-                                    else:
-                                        # Alternative: Try to find clickable elements that might have data attributes
-                                        clickable_elem = card.find(['div', 'section'], attrs={'data-job-id': True})
-                                        if clickable_elem:
-                                            job_id = clickable_elem.get('data-job-id')
-                                            if job_id and job_id.isdigit():
-                                                job_link = f"https://www.foundit.in/job/{job_id}"
-                                    
-                                    # 3. COMPANY NAME
-                                    company_name = 'Not specified'
-                                    company_elem = card.find('div', class_='companyName')
-                                    if company_elem:
-                                        company_name = company_elem.get_text(strip=True)
-                                    
-                                    # 4. EXPERIENCE
-                                    experience = '0'
-                                    card_body = card.find('div', class_='cardBody')
-                                    if card_body:
-                                        # Look for experience in the experienceSalary section
-                                        experience_section = card_body.find('div', class_='experienceSalary')
-                                        if experience_section:
-                                            experience_span = experience_section.find('span', class_='details')
-                                            if experience_span:
-                                                experience_text = experience_span.get_text(strip=True)
-                                                experience = extract_experience_enhanced(experience_text)
-                                        
-                                        # If not found, search all body rows
-                                        if experience == '0':
-                                            body_rows = card_body.find_all('div', class_='bodyRow')
-                                            for row in body_rows:
-                                                row_text = row.get_text(strip=True)
-                                                if any(keyword in row_text.lower() for keyword in ['years', 'year', 'exp', 'experience', 'yrs']):
-                                                    experience = extract_experience_enhanced(row_text)
-                                                    if experience and experience != '0':
-                                                        break
-                                    
-                                    # 5. SALARY - Check if it exists in the HTML structure
-                                    salary = 'Not Disclosed'
-                                    
-                                    # Look for salary in experienceSalary section (might be next to experience)
-                                    if card_body:
-                                        experience_salary_section = card_body.find('div', class_='experienceSalary')
-                                        if experience_salary_section:
-                                            # Look for salary-specific elements
-                                            salary_elements = experience_salary_section.find_all(['span', 'div'], string=re.compile(r'₹|LPA|lakh|salary', re.IGNORECASE))
-                                            for elem in salary_elements:
-                                                salary_text = elem.get_text(strip=True)
-                                                if any(keyword in salary_text.lower() for keyword in ['₹', 'lpa', 'lakh', 'salary']):
-                                                    salary = salary_text
+                                    # Quick fallback
+                                    if experience == '0':
+                                        card_text = card_body.get_text(strip=True)
+                                        experience = extract_experience_enhanced(card_text)
+                                
+                                # GUARANTEED SALARY EXTRACTION - Multiple strategies
+                                salary = 'Not Disclosed'
+                                card_text_lower = card.get_text().lower()
+                                
+                                # Strategy 1: Look for salary in experienceSalary section
+                                if card_body:
+                                    exp_salary_section = card_body.find('div', class_='experienceSalary')
+                                    if exp_salary_section:
+                                        # Look for salary spans/divs
+                                        salary_elems = exp_salary_section.find_all(['span', 'div', 'li'])
+                                        for elem in salary_elems:
+                                            text = elem.get_text(strip=True)
+                                            if any(keyword in text.lower() for keyword in ['₹', 'lpa', 'lakh', 'salary', 'package', 'ctc']):
+                                                salary = extract_salary_text(text)
+                                                if salary != 'Not Disclosed':
                                                     break
-                                            
-                                            # If not found, check if there are multiple details spans
-                                            details_spans = experience_salary_section.find_all('span', class_='details')
-                                            if len(details_spans) > 1:
-                                                # Second span might be salary
-                                                salary_span = details_spans[1]
-                                                salary_text = salary_span.get_text(strip=True)
-                                                if any(keyword in salary_text.lower() for keyword in ['₹', 'lpa', 'lakh', 'salary']):
-                                                    salary = salary_text
-                                    
-                                    # 6. DATE POSTED
-                                    date_posted = 'Not specified'
-                                    card_footer = card.find('div', class_='cardFooter')
-                                    if card_footer:
-                                        time_elem = card_footer.find('div', class_='jobAddedTime')
-                                        if time_elem:
-                                            time_text = time_elem.find('p', class_='timeText')
-                                            if time_text:
-                                                date_text = time_text.get_text(strip=True)
-                                                if date_text:
-                                                    date_posted = clean_date_posted(date_text)
-                                    
-                                    # Create job data
+                                
+                                # Strategy 2: Look for specific salary elements
+                                if salary == 'Not Disclosed':
+                                    salary_selectors = [
+                                        'span[class*="salary"]',
+                                        'div[class*="salary"]', 
+                                        'li[class*="salary"]',
+                                        'span[class*="package"]',
+                                        'div[class*="package"]',
+                                        '.salaryRange',
+                                        '.packageDetails'
+                                    ]
+                                    for selector in salary_selectors:
+                                        salary_elem = card.find(selector)
+                                        if salary_elem:
+                                            salary_text = salary_elem.get_text(strip=True)
+                                            salary = extract_salary_text(salary_text)
+                                            if salary != 'Not Disclosed':
+                                                break
+                                
+                                # Strategy 3: Extract from body rows
+                                if salary == 'Not Disclosed' and card_body:
+                                    body_rows = card_body.find_all('div', class_='bodyRow')
+                                    for row in body_rows:
+                                        row_text = row.get_text(strip=True)
+                                        if any(keyword in row_text.lower() for keyword in ['₹', 'lpa', 'lakh', 'salary', 'package']):
+                                            salary = extract_salary_text(row_text)
+                                            if salary != 'Not Disclosed':
+                                                break
+                                
+                                # Strategy 4: Regex search in entire card text
+                                if salary == 'Not Disclosed':
+                                    salary_match = re.search(r'₹?\s?[\d,\.]+\s?[-–to]+\s?[\d,\.]+\s?(?:LPA|Lakh|Lac|PA|p\.a|p\.a\.)', card_text_lower)
+                                    if not salary_match:
+                                        salary_match = re.search(r'(\d+\.?\d*)\s?-\s?(\d+\.?\d*)\s?(?:LPA|Lakh|Lac)', card_text_lower)
+                                    if salary_match:
+                                        salary = extract_salary_text(salary_match.group(0))
+                                
+                                # Strategy 5: Look for any currency symbols or salary keywords
+                                if salary == 'Not Disclosed':
+                                    if 'lpa' in card_text_lower or 'lakh' in card_text_lower or '₹' in card_text_lower:
+                                        # Extract numbers near salary keywords
+                                        salary_patterns = [
+                                            r'(\d+\.?\d*)\s?-\s?(\d+\.?\d*)\s?lpa',
+                                            r'(\d+\.?\d*)\s?lpa',
+                                            r'₹\s?(\d+\.?\d*)\s?lakh',
+                                            r'(\d+\.?\d*)\s?-\s?(\d+\.?\d*)\s?lakh'
+                                        ]
+                                        for pattern in salary_patterns:
+                                            match = re.search(pattern, card_text_lower)
+                                            if match:
+                                                salary = extract_salary_text(match.group(0))
+                                                break
+                                
+                                # Quick date extraction
+                                date_posted = 'Not specified'
+                                card_footer = card.find('div', class_='cardFooter')
+                                if card_footer:
+                                    time_elem = card_footer.find('div', class_='jobAddedTime')
+                                    if time_elem:
+                                        time_text = time_elem.find('p', class_='timeText')
+                                        if time_text:
+                                            date_text = time_text.get_text(strip=True)
+                                            date_posted = clean_date_posted(date_text)
+                                
+                                if filter_experience(experience):
                                     job_data = {
                                         'job_title': job_title,
                                         'company_name': company_name,
@@ -673,101 +1166,104 @@ def scrape_foundit():
                                         'date_posted': date_posted
                                     }
                                     
-                                    # Filter by experience and add to results
-                                    if filter_experience(experience) and job_data not in all_jobs:
-                                        all_jobs.append(job_data)
-                                        role_jobs_count += 1
-                                        page_jobs_count += 1
-                                        pbar.update(1)
-                                        logging.info(f"Collected: {job_title} | Company: {company_name} | Exp: {experience} | Salary: {salary}")
-                                    else:
-                                        logging.info(f"Skipped '{job_title}' - Experience: {experience}")
-                                    
-                                except Exception as e:
-                                    logging.error(f"Error parsing job card: {e}")
-                                    continue
-                            
-                            print(f"Page {page}: Collected {page_jobs_count} jobs (Total for {role}: {role_jobs_count})")
-                            
-                            if page_jobs_count == 0 and page > 1:
-                                logging.info(f"No new jobs found on page {page} for {role}. Stopping pagination.")
-                                break
-                            
-                            # Pagination
-                            if len(job_cards) > 0:
-                                try:
-                                    next_button = None
-                                    next_selectors = [
-                                        "a[class*='next']",
-                                        "button[class*='next']", 
-                                        "a[title*='Next']",
-                                        "button[title*='Next']",
-                                        "//a[contains(text(), 'Next')]",
-                                        "//button[contains(text(), 'Next')]"
-                                    ]
-                                    
-                                    for selector in next_selectors:
-                                        try:
-                                            if selector.startswith('//'):
-                                                next_button = driver.find_element(By.XPATH, selector)
-                                            else:
-                                                next_button = driver.find_element(By.CSS_SELECTOR, selector)
-                                            
-                                            if next_button.is_displayed() and next_button.is_enabled():
-                                                break
-                                            next_button = None
-                                        except:
-                                            continue
-                                    
-                                    if next_button:
-                                        old_html = driver.page_source
-                                        driver.execute_script("arguments[0].click();", next_button)
-                                        time.sleep(random.uniform(5, 8))
-                                        
-                                        # Wait for new content to load
-                                        WebDriverWait(driver, 20).until(
-                                            lambda d: d.page_source != old_html
-                                        )
-                                        
-                                        page += 1
-                                        logging.info(f"Moving to Foundit page {page} for {role}")
-                                    else:
-                                        logging.info(f"No next button found for {role} on page {page}")
-                                        break
-                                        
-                                except Exception as e:
-                                    logging.error(f"Error with pagination for {role}: {e}")
-                                    break
+                                    all_jobs.append(job_data)
+                                    role_jobs_count += 1
+                                    page_new_jobs += 1
+                                    pbar.update(1)
+                                    logging.info(f"Collected: {job_title} | {company_name} | Salary: {salary} | Exp: {experience}")
+                                
+                            except Exception as e:
+                                logging.error(f"Error parsing job card: {e}")
+                                continue
+                        
+                        if page_new_jobs == 0:
+                            consecutive_empty_pages += 1
+                            print(f"Page {page}: NO NEW JOBS")
+                        else:
+                            consecutive_empty_pages = 0
+                            print(f"Page {page}: {page_new_jobs} new jobs (Total: {role_jobs_count})")
+                        
+                        # Quick pagination
+                        if page < max_pages and page_new_jobs > 0:
+                            time.sleep(random.uniform(2, 3))
+                            if click_foundit_next(driver):
+                                page += 1
                             else:
                                 break
-                            
+                        else:
                             break
                             
-                        except TimeoutException as e:
-                            logging.warning(f"Attempt {attempt + 1}/{retries}: Timeout for {role} on page {page}: {e}")
-                            if attempt < retries - 1:
-                                time.sleep(random.uniform(10, 15))
-                                driver.refresh()
-                                time.sleep(random.uniform(5, 8))
-                            else:
-                                break
-                    
-                    if page > max_pages:
-                        logging.info(f"Reached max pages ({max_pages}) for {role}")
+                    except TimeoutException:
+                        logging.warning(f"Timeout on page {page}")
                         break
-                        
-            print(f"✓ Collected {role_jobs_count} jobs for {role}")
-            time.sleep(random.uniform(10, 15))
+                    except Exception as e:
+                        logging.warning(f"Error on page {page}: {e}")
+                        break
+                    
+                    time.sleep(random.uniform(2, 3))
+            
+            print(f"✓ {role}: {role_jobs_count} jobs")
+            time.sleep(random.uniform(5, 8))
             
     except Exception as e:
         logging.error(f"Error scraping Foundit: {e}")
         print(f"Error scraping Foundit: {e}")
     finally:
         driver.quit()
-        logging.info(f"Collected {len(all_jobs)} jobs from Foundit")
-        print(f"✓ Total collected {len(all_jobs)} jobs from Foundit")
+        logging.info(f"Collected {len(all_jobs)} unique jobs from Foundit")
+        print(f"✓ Total collected {len(all_jobs)} unique jobs from Foundit")
     
     return all_jobs
+
+
+def click_foundit_next(driver):
+    """Quick next button click for Foundit"""
+    try:
+        next_selectors = [
+            "a[class*='next']",
+            "button[class*='next']", 
+            "li[class*='next'] a",
+            "a[aria-label*='next' i]",
+            "//a[contains(text(), 'Next')]",
+            "//button[contains(text(), 'Next')]",
+            ".pagination-next",
+            "[data-cy='next-page']"
+        ]
+        
+        for selector in next_selectors:
+            try:
+                if selector.startswith('//'):
+                    next_btn = driver.find_element(By.XPATH, selector)
+                else:
+                    next_btn = driver.find_element(By.CSS_SELECTOR, selector)
+                
+                if next_btn.is_displayed() and next_btn.is_enabled():
+                    old_url = driver.current_url
+                    driver.execute_script("arguments[0].click();", next_btn)
+                    
+                    # Wait for page change
+                    WebDriverWait(driver, 10).until(
+                        lambda d: d.current_url != old_url
+                    )
+                    
+                    # Quick load check
+                    WebDriverWait(driver, 8).until(
+                        EC.presence_of_element_located((By.CSS_SELECTOR, "div.cardContainer"))
+                    )
+                    
+                    logging.info("✓ Clicked next button")
+                    time.sleep(1.5)
+                    return True
+                    
+            except Exception:
+                continue
+        
+        logging.info("No next button found")
+        return False
+        
+    except Exception as e:
+        logging.error(f"Next button click failed: {e}")
+        return False
 
 # --- Save to CSV ---
 def save_to_csv(jobs, filename):
@@ -793,7 +1289,10 @@ def save_to_csv(jobs, filename):
 # --- Main Execution ---
 def main():
     """Main function to run both scrapers"""
-    print("🚀 Starting Unlimited Job Scraping...")
+    global seen_job_links
+    seen_job_links = set()  # Reset seen links for each run
+    
+    print("Starting Unlimited Job Scraping...")
     logging.info("Starting unlimited job scraping process")
     
     start_time = time.time()
@@ -813,11 +1312,11 @@ def main():
     end_time = time.time()
     duration = end_time - start_time
     
-    print(f"\n🎉 Scraping completed!")
-    print(f"⏱️  Total time: {duration:.2f} seconds")
-    print(f"📊 Total jobs collected: {len(all_jobs)}")
-    print(f"💾 Jobs saved to: {Data_dir}")
-    logging.info(f"Scraping completed. Total jobs: {len(all_jobs)}, Time: {duration:.2f}s")
+    print(f"\nScraping completed!")
+    print(f"Total time: {duration:.2f} seconds")
+    print(f"Total unique jobs collected: {len(all_jobs)}")
+    print(f"Jobs saved to: {Data_dir}")
+    logging.info(f"Scraping completed. Total unique jobs: {len(all_jobs)}, Time: {duration:.2f}s")
 
 if __name__ == "__main__":
     main()

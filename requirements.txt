@@ -15,11 +15,3 @@ webdriver-manager
 fake-useragent
 python-dateutil
 tqdm
-pillow
-regex
-spacy
-transformers
-torch
-pillow
-torchvision 
-torchaudio
