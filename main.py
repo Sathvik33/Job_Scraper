@@ -4,6 +4,7 @@ import time
 import os
 import random
 import logging
+import json
 from datetime import datetime
 from bs4 import BeautifulSoup
 from selenium import webdriver
@@ -19,14 +20,7 @@ from webdriver_manager.chrome import ChromeDriverManager
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.action_chains import ActionChains
 
-# --- Setup Logging ---
-logging.basicConfig(
-    filename=os.path.join('Data', f'scraper_log_{datetime.now().strftime("%Y%m%d_%H%M%S")}.log'),
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
-)
 
-# --- Setup Directories ---
 try:
     Base_dir = os.path.dirname(os.path.abspath(__file__))
 except NameError:
@@ -35,10 +29,8 @@ except NameError:
 Data_dir = os.path.join(Base_dir, 'Data')
 os.makedirs(Data_dir, exist_ok=True)
 
-# --- Job Roles ---
 job_roles = [
     "Software Developer",
-    "Contract DevOps Engineer",
     "Platform Engineer",
     "Python Developer",
     "Cloud Network Engineer",
@@ -292,7 +284,6 @@ job_roles = [
     "AWS Engineer"
 ]
 
-
 seen_job_links = set()
 
 def create_stealth_driver():
@@ -327,29 +318,405 @@ def create_stealth_driver():
     driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
     return driver
 
-# --- Helper Functions ---
+# --- MODIFIED Job Filtering Functions ---
+
+def is_remote_job(job_text):
+    """Check if job is remote/work from home"""
+    if not job_text:
+        return False
+    
+    job_text_lower = job_text.lower()
+    remote_keywords = [
+        'remote', 'work from home', 'wfh', 'work-from-home', 
+        'virtual', 'telecommute', 'work anywhere', 'distributed team'
+    ]
+    
+    return any(keyword in job_text_lower for keyword in remote_keywords)
+
+def is_contract_job(job_text):
+    """Check if job is contract/freelance"""
+    if not job_text:
+        return False
+    
+    job_text_lower = job_text.lower()
+    contract_keywords = [
+        'contract', 'freelance', 'temporary', '6 month', '12 month',
+        'contractor', 'contract basis', 'project basis', 'short term',
+        'contract to hire', 'c2h', 'contractual', 'fixed term'
+    ]
+    
+    return any(keyword in job_text_lower for keyword in contract_keywords)
+
+def has_excluded_keywords(job_text):
+    if not job_text:
+        return True
+    
+    job_text_lower = job_text.lower()
+    
+    # CRITICAL: Exclude ALL full-time jobs
+    fulltime_keywords = [
+        'full time', 'full-time', 'fulltime', 
+        'permanent', 'permanent position', 'permanent role',
+        'direct hire', 'employee', 'employment'
+    ]
+    
+    # Exclude on-site jobs
+    onsite_keywords = [
+        'on-site', 'onsite', 'on site',
+        'work from office', 'office based', 'office-based',
+        'in-office', 'in office',
+        'must relocate', 'relocation required'
+    ]
+    
+    # Exclude hybrid jobs
+    hybrid_keywords = ['hybrid']
+
+    # Exclude part-time
+    parttime_keywords = ['part-time', 'part time', 'parttime']
+    
+    # Combine all exclusion keywords
+    all_excluded = fulltime_keywords + onsite_keywords + hybrid_keywords + parttime_keywords
+    
+    # Check if any excluded keyword exists
+    for keyword in all_excluded:
+        if keyword in job_text_lower:
+            return True
+    
+    return False
+
+def filter_experience(exp_text):
+    """Filter for 2+ years experience"""
+    if not exp_text or exp_text == "0" or exp_text == "Not specified":
+        return False
+
+    exp_text_lower = exp_text.lower().strip()
+
+    # Explicitly reject fresher/entry-level positions
+    reject_keywords = ['fresher', 'intern', 'trainee', 'graduate', 'entry level', 'entry-level', '0-1', '0-2', '0 year', '1 year']
+    if any(word in exp_text_lower for word in reject_keywords):
+        return False
+
+    # Handle ranges like "2-5 years"
+    range_match = re.search(r'(\d+)\s*[-–—to]+\s*(\d+)', exp_text_lower)
+    if range_match:
+        try:
+            min_exp = int(range_match.group(1))
+            return min_exp >= 2
+        except ValueError:
+            return False
+
+    # Handle "3+" or "3+ years"
+    plus_match = re.search(r'(\d+)\s*\+', exp_text_lower)
+    if plus_match:
+        try:
+            exp = int(plus_match.group(1))
+            return exp >= 2
+        except ValueError:
+            return False
+
+    # Handle simple numbers like "3 years"
+    num_match = re.search(r'(\d+)\s*(?:years?|yrs?|y)\b', exp_text_lower)
+    if num_match:
+        try:
+            exp = int(num_match.group(1))
+            return exp >= 2
+        except ValueError:
+            return False
+
+    return False
+
+def meets_all_criteria(job_title, company_name, job_text, experience_text):
+    """MODIFIED: Now requires BOTH remote AND contract, not just one or the other"""
+    if not job_title or not job_text:
+        return False
+    
+    # STEP 1: Check EXCLUSIONS first (if any excluded keyword found, reject immediately)
+    if has_excluded_keywords(job_text):
+        return False
+    
+    # STEP 2: Check INCLUSIONS (MUST have BOTH Remote AND Contract)
+    is_remote = is_remote_job(job_text)
+    is_contract = is_contract_job(job_text)
+    
+    # CHANGED: Require both conditions to be true
+    if not (is_remote and is_contract):
+        return False
+    
+    # STEP 3: Check experience requirement (must be 2+ years)
+    if not filter_experience(experience_text):
+        return False
+    
+    # All criteria met!
+    return True
+
+# --- Extraction Functions for Company Name & Date Posted ---
+
+def extract_company_name(card):
+    company_name = 'Not specified'
+    
+    # Primary Strategy: Direct class name matching
+    company_selectors = [
+        ('div', {'class': lambda x: x and 'company' in str(x).lower()}),
+        ('span', {'class': lambda x: x and 'company' in str(x).lower()}),
+        ('a', {'class': lambda x: x and 'company' in str(x).lower()}),
+        ('p', {'class': lambda x: x and 'company' in str(x).lower()}),
+    ]
+    
+    for tag, attrs in company_selectors:
+        company_elem = card.find(tag, attrs)
+        if company_elem and company_elem.get_text(strip=True):
+            company_name = company_elem.get_text(strip=True)
+            break
+    
+    # Fallback Strategy: If still not found, try broader patterns
+    if company_name == 'Not specified':
+        fallback_selectors = [
+            ('div', {'class': lambda x: x and 'employer' in str(x).lower()}),
+            ('div', {'class': lambda x: x and 'organization' in str(x).lower()}),
+            ('span', {'data-company': True}),
+            ('div', {'itemprop': 'hiringOrganization'}),
+        ]
+        
+        for tag, attrs in fallback_selectors:
+            company_elem = card.find(tag, attrs)
+            if company_elem and company_elem.get_text(strip=True):
+                company_name = company_elem.get_text(strip=True)
+                break
+    
+    # Additional fallback: Look for common text patterns
+    if company_name == 'Not specified':
+        # Look for any element that might contain company name
+        all_elements = card.find_all(['div', 'span', 'p', 'h3', 'h4', 'h5'])
+        for elem in all_elements:
+            text = elem.get_text(strip=True)
+            # Skip if text is too short, looks like a date, or contains common job-related terms
+            if (text and len(text) > 2 and 
+                not any(word in text.lower() for word in ['apply', 'job', 'posted', 'days ago']) and
+                not re.search(r'\d+\s*(day|hour|week|month|ago)', text.lower())):
+                company_name = text
+                break
+    
+    # Clean up the company name
+    company_name = clean_company_name(company_name)
+    
+    return company_name if company_name and company_name != 'Not specified' else 'Not specified'
+
+def clean_company_name(company_text):
+    if not company_text or company_text == 'Not specified':
+        return 'Not specified'
+    
+    # Remove common prefixes
+    prefixes_to_remove = [
+        r'^company:\s*',
+        r'^employer:\s*',
+        r'^at\s+',
+        r'^by\s+',
+        r'^posted by\s+',
+        r'^hiring:\s*',
+    ]
+    
+    for prefix in prefixes_to_remove:
+        company_text = re.sub(prefix, '', company_text, flags=re.IGNORECASE)
+    
+    # Remove job board artifacts
+    artifacts_to_remove = [
+        r'\s*\|\s*shine\.com.*$',
+        r'\s*-\s*shine\.com.*$',
+        r'\s*\(.*?\bverified\b.*?\)',
+        r'\s*★.*$',  # Remove ratings
+        r'\s*\d+\.\d+\s*$',  # Remove standalone ratings
+    ]
+    
+    for artifact in artifacts_to_remove:
+        company_text = re.sub(artifact, '', company_text, flags=re.IGNORECASE)
+    
+    # Clean whitespace
+    company_text = ' '.join(company_text.split())
+    company_text = company_text.strip()
+    
+    # Remove quotes if they wrap the entire name
+    if company_text.startswith('"') and company_text.endswith('"'):
+        company_text = company_text[1:-1]
+    if company_text.startswith("'") and company_text.endswith("'"):
+        company_text = company_text[1:-1]
+    
+    # Validate: must be at least 2 characters and not just numbers
+    if len(company_text) < 2 or company_text.isdigit():
+        return 'Not specified'
+    
+    return company_text
+
+def extract_date_posted(card):
+    date_posted = 'Not specified'
+    
+    # Strategy 1: Look for time-related class names
+    date_selectors = [
+        {'class': lambda x: x and 'time' in str(x).lower()},
+        {'class': lambda x: x and 'date' in str(x).lower()},
+        {'class': lambda x: x and 'posted' in str(x).lower()},
+        {'class': lambda x: x and 'ago' in str(x).lower()},
+        {'data-posted': True},
+        {'itemprop': 'datePosted'}
+    ]
+    
+    for selector in date_selectors:
+        # Try different tags
+        for tag in ['span', 'div', 'li', 'p', 'time']:
+            elem = card.find(tag, selector)
+            if elem:
+                date_text = elem.get_text(strip=True)
+                if date_text and len(date_text) > 1:
+                    date_posted = clean_date_posted(date_text)
+                    if date_posted != 'Not specified':
+                        return date_posted
+    
+    # Strategy 2: Look for <time> tag
+    time_tag = card.find('time')
+    if time_tag:
+        # Try datetime attribute first
+        if time_tag.get('datetime'):
+            date_posted = clean_date_posted(time_tag.get('datetime'))
+            if date_posted != 'Not specified':
+                return date_posted
+        # Try text content
+        date_text = time_tag.get_text(strip=True)
+        if date_text:
+            date_posted = clean_date_posted(date_text)
+            if date_posted != 'Not specified':
+                return date_posted
+    
+    # Strategy 3: Search for date patterns in entire card text
+    card_text = card.get_text()
+    date_patterns = [
+        r'(posted|active|updated)?\s*:?\s*(\d+\s+(?:day|days|hour|hours|week|weeks|month|months)\s+ago)',
+        r'(today|yesterday|just now)',
+        r'(\d+[dDhHwWmM])\s+ago',
+        r'posted\s+on\s+(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})',
+    ]
+    
+    for pattern in date_patterns:
+        match = re.search(pattern, card_text, re.IGNORECASE)
+        if match:
+            # Get the captured date part (usually last group)
+            date_str = match.group(match.lastindex) if match.lastindex > 1 else match.group(0)
+            date_posted = clean_date_posted(date_str)
+            if date_posted != 'Not specified':
+                return date_posted
+    
+    # Strategy 4: Extract from structured data (JSON-LD)
+    script_tags = card.find_all('script', {'type': 'application/ld+json'})
+    for script in script_tags:
+        try:
+            data = json.loads(script.string)
+            if isinstance(data, dict) and 'datePosted' in data:
+                date_posted = clean_date_posted(data['datePosted'])
+                if date_posted != 'Not specified':
+                    return date_posted
+        except:
+            continue
+    
+    return date_posted
+
 def clean_date_posted(date_text):
-    """Clean and standardize date posted text"""
     if not date_text:
         return "Not specified"
     
-    date_text = date_text.strip()
-    date_text = re.sub(r'^(posted|active|employer\s+)?:?\s*', '', date_text, flags=re.IGNORECASE)
+    date_text = str(date_text).strip()
     
-    patterns = [
-        r'(\d+\s+(?:day|days|hour|hours|week|weeks|month|months)\s+ago)',
-        r'(today|yesterday)',
-        r'(\d+[dD])',
-        r'(\d+[hH])',
+    # Remove common prefixes
+    prefixes = [
+        r'^(posted|active|updated|date|time|employer)\s*:?\s*',
+        r'^\|\s*',
+        r'^-\s*',
     ]
+    for prefix in prefixes:
+        date_text = re.sub(prefix, '', date_text, flags=re.IGNORECASE)
     
-    for pattern in patterns:
-        match = re.search(pattern, date_text, re.IGNORECASE)
-        if match:
-            return match.group(1)
+    date_text = date_text.strip()
+    
+    # Pattern 1: "X days/hours/weeks/months ago"
+    pattern1 = r'(\d+)\s*(day|days|hour|hours|week|weeks|month|months)\s*ago'
+    match1 = re.search(pattern1, date_text, re.IGNORECASE)
+    if match1:
+        num = match1.group(1)
+        unit = match1.group(2).lower()
+        # Normalize plural forms
+        if unit == 'days':
+            unit = 'day'
+        elif unit == 'hours':
+            unit = 'hour'
+        elif unit == 'weeks':
+            unit = 'week'
+        elif unit == 'months':
+            unit = 'month'
+        
+        if int(num) > 1 and not unit.endswith('s'):
+            unit += 's'
+        
+        return f"{num} {unit} ago"
+    
+    if re.search(r'\btoday\b', date_text, re.IGNORECASE):
+        return "Today"
+    if re.search(r'\byesterday\b', date_text, re.IGNORECASE):
+        return "Yesterday"
+    if re.search(r'\bjust\s+now\b', date_text, re.IGNORECASE):
+        return "Just now"
+    
+    pattern3 = r'(\d+)\s*([dDhHwWmM])'
+    match3 = re.search(pattern3, date_text)
+    if match3:
+        num = match3.group(1)
+        unit_abbr = match3.group(2).lower()
+        
+        unit_map = {
+            'd': 'day',
+            'h': 'hour',
+            'w': 'week',
+            'm': 'month'
+        }
+        unit = unit_map.get(unit_abbr, 'day')
+        
+        if int(num) > 1:
+            unit += 's'
+        
+        return f"{num} {unit} ago"
+    
+    iso_pattern = r'(\d{4})-(\d{2})-(\d{2})'
+    iso_match = re.search(iso_pattern, date_text)
+    if iso_match:
+        try:
+            date_obj = datetime.strptime(iso_match.group(0), '%Y-%m-%d')
+            today = datetime.now()
+            diff = today - date_obj
+            
+            if diff.days == 0:
+                return "Today"
+            elif diff.days == 1:
+                return "Yesterday"
+            elif diff.days < 7:
+                return f"{diff.days} days ago"
+            elif diff.days < 30:
+                weeks = diff.days // 7
+                return f"{weeks} week{'s' if weeks > 1 else ''} ago"
+            else:
+                months = diff.days // 30
+                return f"{months} month{'s' if months > 1 else ''} ago"
+        except:
+            pass
     
     if re.match(r'^\d+$', date_text):
-        return f"{date_text} days ago"
+        num = int(date_text)
+        unit = 'day' if num == 1 else 'days'
+        return f"{num} {unit} ago"
+    
+    date_pattern = r'(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})'
+    date_match = re.search(date_pattern, date_text)
+    if date_match:
+        return date_text  
+    if len(date_text) > 2 and len(date_text) < 100:
+        cleaned = re.sub(r'[^\w\s]', '', date_text)
+        if cleaned:
+            return cleaned.strip()
     
     return "Not specified"
 
@@ -365,18 +732,8 @@ def extract_experience_enhanced(text):
          lambda m: f"{m.group(1)}-{m.group(2)}"),
         (r'(\d+)\s*\+\s*(?:years?|yrs?|y)\s*(?:of)?\s*(?:experience|exp)?', 
          lambda m: f"{m.group(1)}+"),
-        (r'(?:min|minimum|at least|atleast)\s+(\d+)\s*(?:years?|yrs?|y)', 
-         lambda m: f"{m.group(1)}+"),
         (r'(\d+)\s*(?:years?|yrs?|y)(?:\s+(?:of)?\s*(?:experience|exp))?', 
          lambda m: m.group(1)),
-        (r'\b(senior|lead|principal|sr\.)\b', 
-         lambda m: "5+"),
-        (r'\b(mid[-]?level|mid[-]?senior)\b', 
-         lambda m: "3-5"),
-        (r'\b(junior|jr\.|entry[-]?level)\b', 
-         lambda m: "0-2"),
-        (r'\b(fresher|fresh|graduate|recent graduate|no experience)\b', 
-         lambda m: "0"),
     ]
     
     for pattern, handler in patterns:
@@ -395,264 +752,6 @@ def extract_experience_enhanced(text):
     
     return "0"
 
-def filter_experience(exp_text):
-    """Keep only jobs that clearly mention >= 2 years of experience"""
-    if not exp_text:
-        return False
-
-    exp_text = exp_text.lower().strip()
-
-    if any(word in exp_text for word in ['fresher', 'intern', 'trainee', 'graduate', 'entry']):
-        return False
-
-    range_match = re.search(r'(\d+)\s*[-–—to]+\s*(\d+)', exp_text)
-    if range_match:
-        try:
-            min_exp = int(range_match.group(1))
-            return min_exp >= 2
-        except ValueError:
-            return False
-
-    num_match = re.search(r'(\d+)\s*(?:\+)?\s*(?:years?|yrs?|y)\b', exp_text)
-    if num_match:
-        try:
-            exp = int(num_match.group(1))
-            return exp >= 2
-        except ValueError:
-            return False
-
-    if any(word in exp_text for word in ['senior', 'lead', 'principal', 'mid']):
-        return True
-
-    return False
-
-# --- Helper Functions ---
-def find_and_click_next_button(driver, role, page):
-    """Click numbered pagination links (2 through 10) for Shine"""
-    if page >= 10:
-        logging.info(f"Reached maximum page limit (10) for {role}")
-        return False
-    
-    # Target numbered pagination links
-    page_selectors = [
-        f"//a[contains(@class, 'pagination') and text()='{page + 1}']",  # Direct page number (e.g., "2")
-        f"//a[contains(@class, 'cls_pagination') and text()='{page + 1}']",  # Shine-specific class
-        f"//a[contains(@href, 'page={page + 1}')]",  # Links with page number in href
-        f"//li[contains(@class, 'pagination') or contains(@class, 'cls_pagination')]//a[text()='{page + 1}']",
-        f"//div[contains(@class, 'pagination')]//a[text()='{page + 1}']",
-    ]
-    
-    try:
-        # Scroll to bottom to ensure pagination elements are loaded
-        driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-        time.sleep(random.uniform(1.5, 2.5))
-        
-        for selector in page_selectors:
-            try:
-                # Wait for the page number link to be present
-                page_link = WebDriverWait(driver, 10).until(
-                    EC.presence_of_element_located((By.XPATH, selector))
-                )
-                logging.info(f"Found page {page + 1} link with selector: {selector}")
-                
-                # Check if link is clickable
-                if page_link.is_displayed() and page_link.is_enabled():
-                    # Get current state to detect page change
-                    old_url = driver.current_url
-                    old_page_source = driver.page_source[:1000]
-                    
-                    # Scroll to link and click
-                    driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", page_link)
-                    time.sleep(random.uniform(0.5, 1))
-                    driver.execute_script("arguments[0].click();", page_link)
-                    
-                    # Wait for page change
-                    WebDriverWait(driver, 15).until(
-                        lambda d: d.current_url != old_url or d.page_source[:1000] != old_page_source
-                    )
-                    logging.info(f"Successfully clicked page {page + 1} link for {role}")
-                    return True
-                else:
-                    logging.warning(f"Page {page + 1} link found but not clickable: {selector}")
-            
-            except (TimeoutException, NoSuchElementException, StaleElementReferenceException) as e:
-                logging.debug(f"Selector {selector} for page {page + 1} failed: {str(e)}")
-                continue
-        
-        # Fallback: Try constructing pagination URL
-        logging.info(f"No clickable page {page + 1} link found for {role}. Attempting URL-based pagination.")
-        current_url = driver.current_url
-        next_page = page + 1
-        if 'page=' in current_url:
-            next_url = re.sub(r'page=\d+', f'page={next_page}', current_url)
-        else:
-            separator = '&' if '?' in current_url else '?'
-            next_url = f"{current_url}{separator}page={next_page}"
-        
-        try:
-            driver.get(next_url)
-            WebDriverWait(driver, 15).until(
-                EC.presence_of_element_located((By.CSS_SELECTOR, "div[class*='jobCard'], li[class*='job'], article, [data-job-id]"))
-            )
-            logging.info(f"Successfully navigated to page {next_page} for {role} using URL: {next_url}")
-            return True
-        except Exception as e:
-            logging.warning(f"URL-based pagination failed for {next_url}: {e}")
-        
-        # Fallback: Try infinite scroll
-        logging.info(f"No page {page + 1} link or URL worked for {role}. Attempting infinite scroll.")
-        scroll_height = driver.execute_script("return document.body.scrollHeight")
-        driver.execute_script(f"window.scrollTo(0, {scroll_height});")
-        time.sleep(random.uniform(2, 4))
-        new_scroll_height = driver.execute_script("return document.body.scrollHeight")
-        if new_scroll_height > scroll_height:
-            logging.info(f"Infinite scroll triggered new content for {role} on page {page}")
-            return True
-        
-        logging.info(f"No page {page + 1} found for {role}")
-        return False
-    
-    except Exception as e:
-        logging.error(f"Error in find_and_click_next_button for {role} on page {page}: {e}")
-        return False
-    
-    
-def click_numbered_page(driver, role, target_page):
-    """Use direct URL pattern for pagination - this is the most reliable method"""
-    try:
-        current_url = driver.current_url
-        logging.info(f"Current URL: {current_url}")
-        
-        # Clean the current URL first - remove any existing page parameters
-        clean_url = re.sub(r'[?&]page=\d+', '', current_url)
-        clean_url = re.sub(r'-jobs-\d+', '', clean_url)
-        clean_url = re.sub(r'/jobs/\d+', '', clean_url)
-        
-        # Remove double ? or & characters
-        clean_url = re.sub(r'\?&', '?', clean_url)
-        clean_url = re.sub(r'&&', '&', clean_url)
-        clean_url = clean_url.rstrip('?&')
-        
-        # Construct the new URL with the target page
-        # Try multiple URL patterns that Shine.com uses
-        url_patterns = [
-            f"{clean_url}-jobs-{target_page}",
-            f"{clean_url}/jobs/{target_page}",
-            f"{clean_url}?page={target_page}",
-            f"{clean_url}&page={target_page}"
-        ]
-        
-        for new_url in url_patterns:
-            try:
-                logging.info(f"Trying URL pattern: {new_url}")
-                driver.get(new_url)
-                
-                # Wait for page to load completely
-                WebDriverWait(driver, 20).until(
-                    EC.presence_of_element_located((By.CSS_SELECTOR, "body"))
-                )
-                
-                # Wait for job cards specifically
-                WebDriverWait(driver, 15).until(
-                    EC.presence_of_element_located((By.CSS_SELECTOR, "div[class*='jobCard'], li[class*='job'], article, [data-job-id]"))
-                )
-                
-                # Verify we're on a different page by checking URL
-                current_url_after = driver.current_url
-                logging.info(f"URL after navigation: {current_url_after}")
-                
-                # Check if page number appears in the new URL
-                if (str(target_page) in current_url_after or 
-                    f'page={target_page}' in current_url_after or
-                    f'-jobs-{target_page}' in current_url_after):
-                    logging.info(f"✓ Successfully navigated to page {target_page}")
-                    time.sleep(random.uniform(3, 5))
-                    return True
-                else:
-                    # Even if URL doesn't show page number, check if content changed
-                    logging.info(f"Page number not in URL, but navigation completed")
-                    time.sleep(random.uniform(3, 5))
-                    return True
-                    
-            except Exception as e:
-                logging.warning(f"URL pattern failed: {new_url} - {e}")
-                continue
-        
-        logging.error(f"All URL patterns failed for page {target_page}")
-        return False
-        
-    except Exception as e:
-        logging.error(f"URL pagination failed for page {target_page}: {e}")
-        return False
-    
-
-def handle_captcha(driver, max_attempts=3):
-    """Detect and handle CAPTCHA with improved logic"""
-    for attempt in range(max_attempts):
-        try:
-            captcha_elements = driver.find_elements(By.CSS_SELECTOR, ".cf-turnstile, iframe[src*='recaptcha'], div[class*='g-recaptcha']")
-            if not captcha_elements:
-                logging.info("No CAPTCHA detected.")
-                return True
-
-            logging.info(f"CAPTCHA detected on attempt {attempt + 1}")
-            screenshot_path = os.path.join(Data_dir, f"captcha_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png")
-            driver.save_screenshot(screenshot_path)
-            logging.info(f"Saved CAPTCHA screenshot: {screenshot_path}")
-
-            time.sleep(random.uniform(1.5, 2.5))
-
-            try:
-                # Try clicking CAPTCHA checkbox
-                checkbox = WebDriverWait(driver, 10).until(
-                    EC.element_to_be_clickable((By.CSS_SELECTOR, "input[type='checkbox'][id*='recaptcha'], div[class*='recaptcha-checkbox']"))
-                )
-                ActionChains(driver).move_to_element(checkbox).click().perform()
-                logging.info("Clicked reCAPTCHA checkbox")
-                time.sleep(4)
-
-                # Check if CAPTCHA is resolved
-                captcha_elements = driver.find_elements(By.CSS_SELECTOR, ".cf-turnstile, iframe[src*='recaptcha'], div[class*='g-recaptcha']")
-                if not captcha_elements:
-                    logging.info("CAPTCHA resolved after checkbox click")
-                    return True
-            except TimeoutException:
-                logging.warning("Could not find clickable reCAPTCHA checkbox")
-
-            # Check for image-based CAPTCHA
-            try:
-                challenge_iframe = driver.find_element(By.CSS_SELECTOR, "iframe[title*='challenge']")
-                logging.warning("CAPTCHA escalated to image challenge")
-                print(f"Image-based CAPTCHA detected. Manual intervention required. Screenshot: {screenshot_path}")
-                input("Solve CAPTCHA manually and press Enter to continue...")
-                return False
-            except NoSuchElementException:
-                logging.info("No image-based CAPTCHA detected")
-                return True
-
-        except Exception as e:
-            logging.error(f"Error handling CAPTCHA on attempt {attempt + 1}: {e}")
-            if attempt == max_attempts - 1:
-                logging.error("Max CAPTCHA attempts reached. Giving up.")
-                return False
-            time.sleep(random.uniform(10, 15))
-
-    return False
-
-def is_duplicate_job(job_link):
-    """Check if job link has already been processed with relaxed normalization"""
-    if not job_link:
-        return True
-    
-    # Normalize by removing query parameters and trailing slashes
-    normalized_link = re.sub(r'\?.*$', '', job_link.strip().lower()).rstrip('/')
-    if normalized_link in seen_job_links:
-        return True
-    
-    seen_job_links.add(normalized_link)
-    return False
-
-
 def extract_salary_text(text):
     """Extract and normalize salary data from given raw text."""
     if not text:
@@ -660,8 +759,8 @@ def extract_salary_text(text):
     
     text = text.strip()
     patterns = [
-        r"\₹?\s?[\d,\.]+(?:\s?[-–to]+\s?[\d,\.]+)?\s?(?:LPA|PA|per annum|lakhs|lakh|k|K|₹)?",  # e.g. ₹8L - ₹18L PA, 10-15 LPA, 5,00,000 - 8,00,000
-        r"\$[\d,\.]+(?:\s?[-–to]+\s?[\d,\.]+)?\s?(?:per year|per annum|yearly)?",             # e.g. $50,000 - $70,000 per year
+        r"₹?\s?[\d,\.]+(?:\s?[-–to]+\s?[\d,\.]+)?\s?(?:LPA|PA|per annum|lakhs|lakh|k|K|₹)?",
+        r"\$[\d,\.]+(?:\s?[-–to]+\s?[\d,\.]+)?\s?(?:per year|per annum|yearly)?",
         r"[\d,\.]+\s?(?:to|[-–])\s?[\d,\.]+\s?(?:USD|INR|EUR|GBP|AED)?",
     ]
     
@@ -672,324 +771,261 @@ def extract_salary_text(text):
     
     return text
 
+def is_duplicate_job(job_link):
+    """Check if job link has already been processed"""
+    if not job_link:
+        return True
+    
+    normalized_link = re.sub(r'\?.*$', '', job_link.strip().lower()).rstrip('/')
+    if normalized_link in seen_job_links:
+        return True
+    
+    seen_job_links.add(normalized_link)
+    return False
+
 
 def scrape_shine():
-    """Scrape ALL jobs from Shine for each job role (unlimited)"""
-    logging.info("Starting unlimited Shine scraping")
-    print("\n=== Starting Unlimited Shine Scraping ===")
+    
     all_jobs = []
     driver = create_stealth_driver()
     
     try:
         for role_idx, role in enumerate(job_roles):
-            print(f"\n--- Scraping role {role_idx + 1}/{len(job_roles)}: {role} ---")
-            query = requests.utils.quote(role.replace('/', '-').replace(':', ''))
-            base_url = f"https://www.shine.com/job-search/{query}-jobs"
+            print(f"\n{'='*60}")
+            print(f"Scraping role {role_idx + 1}/{len(job_roles)}: {role}")
+            print(f"{'='*60}")
             
-            driver.get(base_url)
+            # MODIFIED: Search for both remote AND contract
+            query = requests.utils.quote(f"remote contract {role}")
+            search_url = f"https://www.shine.com/job-search/{query}-jobs"
+            
+            print(f"Search URL: {search_url}")
+            driver.get(search_url)
             time.sleep(random.uniform(8, 12))
             
             # Handle initial pop-ups
             try:
-                close_selectors = [
-                    "button[aria-label='Close']", ".closeBtn", "[data-testid='modal-close']", 
-                    "button[id*='reject']", "button[id*='accept']", ".gdpr-consent-button", 
-                    ".modal-close", ".close-icon", ".popup-close"
-                ]
-                for selector in close_selectors:
+                close_buttons = driver.find_elements(By.CSS_SELECTOR, "button[aria-label='Close'], .closeBtn, [data-testid='modal-close']")
+                for btn in close_buttons:
                     try:
-                        close_btn = WebDriverWait(driver, 5).until(
-                            EC.element_to_be_clickable((By.CSS_SELECTOR, selector))
-                        )
-                        driver.execute_script("arguments[0].click();", close_btn)
-                        time.sleep(2)
-                        logging.info(f"Closed pop-up with selector: {selector}")
-                        break
+                        btn.click()
+                        time.sleep(1)
                     except:
                         continue
-            except Exception as e:
-                logging.warning(f"Failed to close pop-up on Shine: {e}")
-            
-            if not handle_captcha(driver):
-                logging.error(f"Failed to handle CAPTCHA for role: {role}. Skipping.")
-                print(f"✗ Failed to handle CAPTCHA for {role}. Skipping.")
-                time.sleep(random.uniform(10, 15))
-                continue
+            except:
+                pass
             
             page = 1
-            max_pages = 25
+            max_pages = 300 
             role_jobs_count = 0
-            consecutive_duplicate_pages = 0
-            max_consecutive_duplicates = 3
+            consecutive_zero_pages = 0
+            max_consecutive_zero = 5
             
-            with tqdm(desc=f"Shine {role[:20]}...", unit="job") as pbar:
-                while page <= max_pages and consecutive_duplicate_pages < max_consecutive_duplicates:
-                    retries = 3
-                    page_success = False
+            while page <= max_pages and consecutive_zero_pages < max_consecutive_zero:
+                print(f"\n--- Page {page} ---")
+                
+                try:
+                    WebDriverWait(driver, 10).until(
+                        EC.presence_of_element_located((By.CSS_SELECTOR, "div[class*='jobCard'], li[class*='job'], article, [data-job-id]"))
+                    )
                     
-                    for attempt in range(retries):
+                    driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+                    time.sleep(2)
+                    
+                    soup = BeautifulSoup(driver.page_source, 'html.parser')
+                    
+                    job_cards = (
+                        soup.find_all('div', {'class': lambda x: x and 'jobCard' in str(x)}) or
+                        soup.find_all('li', {'class': lambda x: x and 'job' in str(x).lower()}) or
+                        soup.find_all('article') or
+                        soup.find_all('div', attrs={'data-job-id': True}) or
+                        []
+                    )
+                    
+                    print(f"Found {len(job_cards)} total job cards")
+                    
+                    if not job_cards:
+                        print("No job cards found, stopping...")
+                        consecutive_zero_pages += 1
+                        break
+                    
+                    page_jobs = 0
+                    
+                    for card in job_cards:
                         try:
-                            # Check for CAPTCHA on each page
-                            if not handle_captcha(driver):
-                                logging.error(f"CAPTCHA detected on page {page} for {role}. Skipping role.")
-                                break
-                            
-                            # Wait for job cards
-                            WebDriverWait(driver, 10).until(
-                                EC.presence_of_element_located((By.CSS_SELECTOR, "div[class*='jobCard'], li[class*='job'], article, [data-job-id]"))
+                            title_elem = (
+                                card.find('h2') or card.find('h3') or 
+                                card.find('a', {'class': lambda x: x and 'title' in str(x).lower()}) or
+                                card.find('strong') or card.find('span', {'class': lambda x: x and 'title' in str(x).lower()})
                             )
+                            job_title = title_elem.get_text(strip=True) if title_elem else ''
                             
-                            # Scroll to load content
-                            driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-                            time.sleep(2)
-                            driver.execute_script("window.scrollTo(0, 0);")
-                            time.sleep(1)
+                            if not job_title:
+                                continue
                             
-                            soup = BeautifulSoup(driver.page_source, 'html.parser')
+                            link_elem = card.find('a', href=True)
+                            job_link = ''
+                            if link_elem:
+                                href = link_elem.get('href', '')
+                                if href.startswith('/'):
+                                    job_link = f"https://www.shine.com{href}"
+                                elif href.startswith('http'):
+                                    job_link = href
                             
-                            job_cards = (
-                                soup.find_all('div', {'class': lambda x: x and 'jobCard' in str(x)}) or
-                                soup.find_all('li', {'class': lambda x: x and 'job' in str(x).lower()}) or
-                                soup.find_all('div', {'id': lambda x: x and 'job' in str(x).lower()}) or
-                                soup.find_all('div', attrs={'data-job-id': True}) or
-                                soup.find_all('article') or
-                                []
+                            if is_duplicate_job(job_link):
+                                continue
+                            
+                            company_name = extract_company_name(card)
+                            
+                            card_text = card.get_text(strip=True)
+                            
+                            experience = extract_experience_enhanced(card_text)
+                            
+                            if not meets_all_criteria(job_title, company_name, card_text, experience):
+                                continue
+                            
+                            salary = "Not Disclosed"
+                            salary_elem = (
+                                card.find('li', {'class': lambda x: x and 'salary' in str(x).lower()}) or
+                                card.find('div', {'class': lambda x: x and 'salary' in str(x).lower()}) or
+                                card.find('span', {'class': lambda x: x and 'salary' in str(x).lower()})
                             )
+                            if salary_elem:
+                                raw_salary = salary_elem.get_text(strip=True)
+                                salary = extract_salary_text(raw_salary)
                             
-                            logging.info(f"Found {len(job_cards)} job cards for {role} on page {page}")
+                            date_posted = extract_date_posted(card)
                             
-                            if not job_cards:
-                                logging.info(f"No job cards found on page {page} for {role}")
-                                consecutive_duplicate_pages += 1
-                                break
+                            # MODIFIED: Since we're only getting remote+contract jobs, work_type is always "Remote + Contract"
+                            work_type_str = "Remote + Contract"
                             
-                            page_jobs_count = 0
-                            page_duplicate_count = 0
-                            page_new_jobs = 0
+                            # Save job data
+                            job_data = {
+                                'job_title': job_title,
+                                'company_name': company_name,
+                                'job_link': job_link,
+                                'experience': experience,
+                                'salary': salary,
+                                'date_posted': date_posted,
+                                'work_type': work_type_str
+                            }
                             
-                            for card in job_cards:
+                            all_jobs.append(job_data)
+                            role_jobs_count += 1
+                            page_jobs += 1
+                            
+                            print(f"✓ QUALIFIED: {job_title[:50]}... | {company_name[:30]}... | {work_type_str}")
+                            
+                        except Exception as e:
+                            continue
+                    
+                    print(f"Page {page}: Found {page_jobs} qualified jobs")
+                    
+                    if page_jobs == 0:
+                        consecutive_zero_pages += 1
+                        print(f"⚠ No qualified jobs on page {page}. Consecutive zero pages: {consecutive_zero_pages}")
+                    else:
+                        consecutive_zero_pages = 0 
+                    if consecutive_zero_pages >= max_consecutive_zero:
+                        print(f"Stopping {role} - {consecutive_zero_pages} consecutive pages with no qualified jobs")
+                        break
+                    
+                    if page < max_pages:
+                        try:
+                            next_selectors = [
+                                f"a[href*='page={page+1}']",
+                                f"a[href*='-jobs-{page+1}']",
+                                "a.pagination-next",
+                                "button[aria-label*='next']",
+                            ]
+                            
+                            next_found = False
+                            for selector in next_selectors:
                                 try:
-                                    title_elem = (
-                                        card.find('h2') or card.find('h3') or 
-                                        card.find('a', {'class': lambda x: x and 'title' in str(x).lower()}) or
-                                        card.find('strong') or card.find('b') or
-                                        card.find('span', {'class': lambda x: x and 'title' in str(x).lower()})
-                                    )
-                                    job_title = title_elem.get_text(strip=True) if title_elem else ''
-                                    
-                                    if not job_title or len(job_title) < 3:
-                                        continue
-                                    
-                                    link_elem = card.find('a', href=True)
-                                    job_link = ''
-                                    if link_elem:
-                                        href = link_elem.get('href', '')
-                                        if href.startswith('/'):
-                                            job_link = f"https://www.shine.com{href}"
-                                        elif href.startswith('http'):
-                                            job_link = href
-                                    
-                                    if is_duplicate_job(job_link):
-                                        page_duplicate_count += 1
-                                        continue
-                                    
-                                    company_name = 'Not specified'
-                                    company_selectors = [
-                                        ('div', {'class': lambda x: x and 'company' in str(x).lower()}),
-                                        ('span', {'class': lambda x: x and 'company' in str(x).lower()}),
-                                        ('a', {'class': lambda x: x and 'company' in str(x).lower()}),
-                                        ('p', {'class': lambda x: x and 'company' in str(x).lower()}),
-                                    ]
-                                    
-                                    for tag, attrs in company_selectors:
-                                        company_elem = card.find(tag, attrs)
-                                        if company_elem and company_elem.get_text(strip=True):
-                                            company_name = company_elem.get_text(strip=True)
-                                            break
-                                    
-                                    # FIXED: Better salary extraction for Shine
-                                    salary = "Not Disclosed"
-                                    salary_selectors = [
-                                        ('li', {'class': lambda x: x and 'salary' in str(x).lower()}),
-                                        ('div', {'class': lambda x: x and 'salary' in str(x).lower()}),
-                                        ('span', {'class': lambda x: x and 'salary' in str(x).lower()}),
-                                        ('div', {'class': 'salaryRange'}),
-                                        ('span', {'class': 'salaryRange'}),
-                                        ('div', {'class': lambda x: x and 'package' in str(x).lower()}),
-                                    ]
-                                    
-                                    for tag, attrs in salary_selectors:
-                                        salary_elem = card.find(tag, attrs)
-                                        if salary_elem:
-                                            raw_salary = salary_elem.get_text(strip=True)
-                                            if raw_salary and 'lpa' in raw_salary.lower():
-                                                salary = extract_salary_text(raw_salary)
-                                                break
-                                    
-                                    # FIXED: Better date posted extraction for Shine
-                                    date_posted = 'Not specified'
-                                    date_selectors = [
-                                        ('li', {'class': lambda x: x and 'time' in str(x).lower()}),
-                                        ('div', {'class': lambda x: x and 'time' in str(x).lower()}),
-                                        ('span', {'class': lambda x: x and 'time' in str(x).lower()}),
-                                        ('div', {'class': lambda x: x and 'date' in str(x).lower()}),
-                                        ('span', {'class': lambda x: x and 'date' in str(x).lower()}),
-                                        ('time', {}),  # HTML5 time element
-                                        ('div', {'class': 'jobAge'}),
-                                        ('span', {'class': 'jobAge'}),
-                                    ]
-                                    
-                                    for tag, attrs in date_selectors:
-                                        date_elem = card.find(tag, attrs)
-                                        if date_elem:
-                                            date_text = date_elem.get_text(strip=True)
-                                            if date_text and any(keyword in date_text.lower() for keyword in ['day', 'hour', 'week', 'month', 'ago', 'today', 'yesterday']):
-                                                date_posted = clean_date_posted(date_text)
-                                                break
-                                    
-                                    # Alternative: Extract from card text if specific elements not found
-                                    card_text = card.get_text(strip=True)
-                                    
-                                    # If salary not found, try to extract from card text
-                                    if salary == "Not Disclosed":
-                                        salary_match = re.search(r'₹?\s?[\d,\.]+\s?[-–to]+\s?[\d,\.]+\s?(?:LPA|Lakh|Lac|PA|per annum)', card_text, re.IGNORECASE)
-                                        if salary_match:
-                                            salary = extract_salary_text(salary_match.group(0))
-                                    
-                                    # If date not found, try to extract from card text
-                                    if date_posted == 'Not specified':
-                                        date_match = re.search(r'(\d+\s*(?:day|days|hour|hours|week|weeks|month|months)\s*ago|today|yesterday|\d+[dDhH])', card_text, re.IGNORECASE)
-                                        if date_match:
-                                            date_posted = clean_date_posted(date_match.group(1))
-                                    
-                                    experience = extract_experience_enhanced(card.get_text(strip=True))
-                                    
-                                    if filter_experience(experience):
-                                        job_data = {
-                                            'job_title': job_title,
-                                            'company_name': company_name,
-                                            'job_link': job_link,
-                                            'experience': experience,
-                                            'salary': salary,
-                                            'date_posted': date_posted
-                                        }
-                                        
-                                        all_jobs.append(job_data)
-                                        role_jobs_count += 1
-                                        page_jobs_count += 1
-                                        page_new_jobs += 1
-                                        pbar.update(1)
-                                        logging.info(f"Collected: {job_title} | {company_name} | Salary: {salary} | Posted: {date_posted}")
-                                    
-                                except Exception as e:
-                                    logging.error(f"Error parsing job card: {e}")
+                                    next_btn = driver.find_element(By.CSS_SELECTOR, selector)
+                                    driver.execute_script("arguments[0].click();", next_btn)
+                                    time.sleep(random.uniform(3, 5))
+                                    next_found = True
+                                    break
+                                except:
                                     continue
                             
-                            if page_new_jobs == 0:
-                                consecutive_duplicate_pages += 1
-                            else:
-                                consecutive_duplicate_pages = 0
-                            
-                            print(f"Page {page}: {page_new_jobs} new, {page_duplicate_count} duplicates (Total: {role_jobs_count})")
-                            
-                            if consecutive_duplicate_pages >= max_consecutive_duplicates:
-                                logging.info(f"Stopping {role} - {consecutive_duplicate_pages} consecutive duplicate pages")
-                                break
-                            
-                            # Move to next page using URL-based pagination
-                            if page < max_pages:
-                                time.sleep(random.uniform(3, 5))
-                                next_page = page + 1
-                                
-                                # Use the improved URL-based pagination
-                                if click_numbered_page(driver, role, next_page):
-                                    page = next_page
-                                    page_success = True
-                                    logging.info(f"Successfully moved to page {page} for {role}")
-                                    break
+                            if not next_found:
+                                current_url = driver.current_url
+                                if 'page=' in current_url:
+                                    next_url = current_url.replace(f'page={page}', f'page={page+1}')
                                 else:
-                                    logging.info(f"Pagination failed for {role} after page {page}")
-                                    break
+                                    separator = '&' if '?' in current_url else '?'
+                                    next_url = f"{current_url}{separator}page={page+1}"
+                                
+                                driver.get(next_url)
+                                time.sleep(random.uniform(3, 5))
                             
-                            page_success = True
-                            break
+                            page += 1
                             
-                        except TimeoutException as e:
-                            logging.warning(f"Attempt {attempt + 1}/{retries}: Timeout on page {page}: {e}")
-                            if attempt < retries - 1:
-                                time.sleep(random.uniform(10, 15))
-                                driver.refresh()
-                                time.sleep(5)
-                            else:
-                                break
                         except Exception as e:
-                            logging.error(f"Error on page {page}: {e}")
-                            if attempt < retries - 1:
-                                time.sleep(random.uniform(10, 15))
-                            else:
-                                break
-                    
-                    if not page_success:
+                            print(f"Could not navigate to page {page+1}: {e}")
+                            break
+                    else:
                         break
-                    time.sleep(random.uniform(5, 8))
                         
-            print(f"✓ Finished {role}: {role_jobs_count} jobs")
-            time.sleep(random.uniform(10, 15))
+                except TimeoutException:
+                    print(f"Timeout on page {page}, stopping...")
+                    consecutive_zero_pages += 1
+                    break
+                except Exception as e:
+                    print(f"Error on page {page}: {e}")
+                    consecutive_zero_pages += 1
+                    break
+            
+            print(f"Finished {role}: {role_jobs_count} qualified jobs")
+            
+            # If we stopped due to consecutive zero pages, print message
+            if consecutive_zero_pages >= max_consecutive_zero:
+                print(f"Moving to next role after {consecutive_zero_pages} consecutive pages with no qualified jobs")
+            
+            time.sleep(random.uniform(5,8))
             
     except Exception as e:
-        logging.error(f"Error scraping Shine: {e}")
         print(f"Error scraping Shine: {e}")
     finally:
         driver.quit()
-        logging.info(f"Collected {len(all_jobs)} unique jobs from Shine")
-        print(f"✓ Total collected {len(all_jobs)} unique jobs from Shine")
+        print(f" Total collected {len(all_jobs)} qualified Remote+Contract jobs from Shine")
     
     return all_jobs
 
-# --- Save to CSV ---
 def save_to_csv(jobs, filename):
-    """Save jobs to CSV file"""
     if not jobs:
-        logging.warning(f"No jobs to save for {filename}")
         print(f"No jobs to save for {filename}")
         return
     
     filepath = os.path.join(Data_dir, filename)
     try:
         with open(filepath, 'w', newline='', encoding='utf-8') as csvfile:
-            fieldnames = ['job_title', 'company_name', 'job_link', 'experience', 'salary', 'date_posted']
+            fieldnames = ['job_title', 'company_name', 'job_link', 'experience', 'salary', 'date_posted', 'work_type']
             writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
             writer.writeheader()
             writer.writerows(jobs)
-        logging.info(f"Successfully saved {len(jobs)} jobs to {filepath}")
-        print(f"✓ Successfully saved {len(jobs)} jobs to {filepath}")
+        print(f"Successfully saved {len(jobs)} jobs to {filepath}")
     except Exception as e:
-        logging.error(f"Error saving to CSV {filename}: {e}")
-        print(f"Error saving to CSV {filename}: {e}")
+        print(f"Error saving to CSV: {e}")
 
-# --- Main Execution ---
 def main():
-    """Main function to run both scrapers"""
     global seen_job_links
-    seen_job_links = set() 
-    
-    print("Starting Unlimited Job Scraping...")
-    logging.info("Starting unlimited job scraping process")
+    seen_job_links = set()
     
     start_time = time.time()
     
     # Scrape Shine
     shine_jobs = scrape_shine()
-    save_to_csv(shine_jobs, f'shine_jobs.csv')
+    save_to_csv(shine_jobs, 'remote_contract_software_jobs.csv')
     
     end_time = time.time()
     duration = end_time - start_time
     
-    print(f"\nScraping completed!")
-    print(f"Total time: {duration:.2f} seconds")
-    print(f"Total unique jobs collected: {len(shine_jobs)}")
+    print(f"\nScraping completed in {duration:.2f} seconds!")
+    print(f"Total qualified jobs: {len(shine_jobs)}")
     print(f"Jobs saved to: {Data_dir}")
-    logging.info(f"Scraping completed. Total unique jobs: {len(shine_jobs)}, Time: {duration:.2f}s")
 
 if __name__ == "__main__":
     main()
