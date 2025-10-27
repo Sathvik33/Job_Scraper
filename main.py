@@ -438,7 +438,6 @@ def meets_all_criteria(job_title, company_name, job_text, experience_text):
     is_remote = is_remote_job(job_text)
     is_contract = is_contract_job(job_text)
     
-    # CHANGED: Require both conditions to be true
     if not (is_remote and is_contract):
         return False
     
