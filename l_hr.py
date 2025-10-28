@@ -16,29 +16,21 @@ def normalise_company(name: str) -> str:
     if not isinstance(name, str):
         return ""
     name = name.lower().strip()
-    # Remove legal suffixes
+
     name = re.sub(r'\b(inc\.?|incorporated|ltd\.?|llc|corp\.?|corporation|private|pvt\.?|llp|group|services|technologies|consulting|consultancy|solutions|labs|systems)\b', '', name)
-    # Remove punctuation & extra spaces
+
     name = re.sub(r'[^a-z0-9\s]', ' ', name)
     name = re.sub(r'\s+', ' ', name).strip()
     return name
 
-# ----------------------------------------------------------------------
-# 3. Load CSVs
-# ----------------------------------------------------------------------
 leads_df = pd.read_csv(leads_path)
 jobs_df  = pd.read_csv(jobs_path)
 target_df = pd.read_csv(target_path)
-
-# ----------------------------------------------------------------------
-# 4. Normalise company names
-# ----------------------------------------------------------------------
 leads_df['norm_company'] = leads_df['company_name'].apply(normalise_company)
 jobs_df['norm_company']  = jobs_df['company_name'].apply(normalise_company)
 
 jobs_df = jobs_df[jobs_df['norm_company'] != 'turing']
 
-# Build lookup: norm_company → list of HR rows
 hr_lookup = {}
 for _, row in leads_df.iterrows():
     key = row['norm_company']
@@ -46,27 +38,19 @@ for _, row in leads_df.iterrows():
         hr_lookup[key] = []
     hr_lookup[key].append(row.to_dict())
 
-# ----------------------------------------------------------------------
-# 5. Target columns (65 in exact order)
-# ----------------------------------------------------------------------
 target_columns = target_df.columns.tolist()
 
-# ----------------------------------------------------------------------
-# 6. Merge: Job + HR (only if name matches), use companyUrl for LinkedIn
-# ----------------------------------------------------------------------
 output_rows = []
 
 for _, job in jobs_df.iterrows():
     job_norm = job['norm_company']
-    company_linkedin = job.get('companyUrl', '')  # From jobs file
+    company_linkedin = job.get('companyUrl', '')
 
     if job_norm not in hr_lookup:
-        continue  # No HR → skip job
+        continue 
 
     for hr in hr_lookup[job_norm]:
         row = {col: '' for col in target_columns}
-
-        # ----- Job fields -------------------------------------------------
         row['job title']       = job.get('job_title', '')
         row['company name']    = job.get('company_name', '')
         row['job link']        = job.get('jobUrl', '')
@@ -77,7 +61,6 @@ for _, job in jobs_df.iterrows():
         row['Company Name']    = job.get('company_name', '')
         row['Company Name for Emails'] = job.get('company_name', '')
 
-        # ----- HR fields --------------------------------------------------
         row['First Name']      = hr.get('first_name', '')
         row['Last Name']       = hr.get('last_name', '')
         row['Title']           = hr.get('job_title', '')
@@ -88,7 +71,7 @@ for _, job in jobs_df.iterrows():
         row['Industry']        = hr.get('industry', '')
         row['Keywords']        = hr.get('keywords', '')
         row['Website']         = hr.get('company_website', '')
-        row['Company Linkedin Url'] = company_linkedin  # FROM JOBS FILE
+        row['Company Linkedin Url'] = company_linkedin  
         row['City']            = hr.get('city', '')
         row['State']           = hr.get('state', '')
         row['Country']         = hr.get('country', '')
@@ -103,13 +86,11 @@ for _, job in jobs_df.iterrows():
         row['Total Funding']   = hr.get('company_total_funding', '')
         row['Secondary Email'] = hr.get('personal_email', '')
 
-        # ----- Static -----------------------------------------------------
         row['Stage'] = 'Cold'
 
         output_rows.append(row)
 
 
-# DEBUG: Show which companies matched
 matched_companies = set(jobs_df[jobs_df['norm_company'].isin(hr_lookup.keys())]['company_name'])
 print("\nMATCHED COMPANIES:")
 for c in sorted(matched_companies):
@@ -118,9 +99,6 @@ for c in sorted(matched_companies):
     print(f"   • {c} → {job_count} job(s) × {hr_count} HR = {job_count * hr_count} row(s)")
 
 
-# ----------------------------------------------------------------------
-# 7. Save to l_hr.csv
-# ----------------------------------------------------------------------
 final_df = pd.DataFrame(output_rows, columns=target_columns)
 
 # Ensure output directory exists

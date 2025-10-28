@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Job Scraper</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body {
+            background-color: #f8f9fa;
+            padding: 20px;
+        }
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 2rem;
+            border-radius: 10px;
+            margin-bottom: 2rem;
+        }
+        .card {
+            border: none;
+            border-radius: 10px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            margin-bottom: 1rem;
+        }
+        .progress {
+            height: 20px;
+            margin: 10px 0;
+        }
+        .platform-card {
+            cursor: pointer;
+            transition: transform 0.2s;
+        }
+        .platform-card:hover {
+            transform: translateY(-2px);
+        }
+        .platform-card.selected {
+            border: 2px solid #007bff;
+            background-color: #f8f9fa;
+        }
+        .preview-table {
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        .status-indicator {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            display: inline-block;
+            margin-right: 5px;
+        }
+        .status-running {
+            background-color: #ffc107;
+        }
+        .status-success {
+            background-color: #198754;
+        }
+        .status-error {
+            background-color: #dc3545;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <div class="header text-center">
+            <h1>💼 Job Scraper Dashboard</h1>
+            <p class="lead">Enter your job titles and select platforms to scrape</p>
+        </div>
+
+        <!-- Main Form -->
+        <div class="row">
+            <div class="col-md-8 mx-auto">
+                <div class="card">
+                    <div class="card-body">
+                        <h5 class="card-title">Configure Your Job Search</h5>
+                        
+                        <!-- Job Titles Input -->
+                        <div class="mb-3">
+                            <label class="form-label"><strong>Enter Job Titles:</strong></label>
+                            <textarea class="form-control" id="jobTitles" rows="4" placeholder="Software Developer&#10;Data Engineer&#10;Frontend Developer&#10;Backend Developer"></textarea>
+                            <div class="form-text">Enter each job title on a separate line. These will be used as search keywords.</div>
+                        </div>
+
+                        <!-- Platform Selection -->
+                        <div class="mb-3">
+                            <label class="form-label"><strong>Select Platforms to Scrape:</strong></label>
+                            <div class="row">
+                                <div class="col-md-6 mb-2">
+                                    <div class="card platform-card" onclick="togglePlatform('linkedin')" id="platform-linkedin">
+                                        <div class="card-body text-center">
+                                            <h5>🔗 LinkedIn</h5>
+                                            <p class="text-muted">Professional network jobs</p>
+                                            <small>Uses your custom job titles as search keywords</small>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="col-md-6 mb-2">
+                                    <div class="card platform-card" onclick="togglePlatform('shine')" id="platform-shine">
+                                        <div class="card-body text-center">
+                                            <h5>✨ Shine.com</h5>
+                                            <p class="text-muted">Indian job portal</p>
+                                            <small>Searches for remote contract positions</small>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Start Button -->
+                        <button class="btn btn-primary btn-lg w-100" onclick="startScraping()" id="startBtn">
+                            Start Scraping
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Progress Section -->
+                <div class="card mt-4" id="progressSection" style="display: none;">
+                    <div class="card-body">
+                        <h5 class="card-title">Scraping Progress</h5>
+                        <div id="progressMessage" class="alert alert-info">
+                            <span id="statusIndicator" class="status-indicator status-running"></span>
+                            <span id="statusText">Preparing to start...</span>
+                        </div>
+                        <div class="progress">
+                            <div id="progressBar" class="progress-bar progress-bar-striped progress-bar-animated" 
+                                 role="progressbar" style="width: 0%"></div>
+                        </div>
+                        <div id="progressText" class="text-center">0%</div>
+                    </div>
+                </div>
+
+                <!-- Results Section -->
+                <div class="card mt-4" id="resultsSection" style="display: none;">
+                    <div class="card-body">
+                        <h5 class="card-title">Scraping Results</h5>
+                        <div id="resultsContent"></div>
+                    </div>
+                </div>
+
+                <!-- Data Preview Section -->
+                <div class="card mt-4" id="previewSection" style="display: none;">
+                    <div class="card-body">
+                        <h5 class="card-title">Data Preview</h5>
+                        <div id="previewContent"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        let selectedPlatforms = new Set();
+        let statusCheckInterval = null;
+
+        function togglePlatform(platform) {
+            const card = document.getElementById(`platform-${platform}`);
+            if (selectedPlatforms.has(platform)) {
+                selectedPlatforms.delete(platform);
+                card.classList.remove('selected');
+            } else {
+                selectedPlatforms.add(platform);
+                card.classList.add('selected');
+            }
+        }
+
+        function startScraping() {
+            const jobTitlesText = document.getElementById('jobTitles').value.trim();
+            if (!jobTitlesText) {
+                alert('Please enter at least one job title');
+                return;
+            }
+
+            if (selectedPlatforms.size === 0) {
+                alert('Please select at least one platform');
+                return;
+            }
+
+            const jobTitles = jobTitlesText.split('\n')
+                .map(title => title.trim())
+                .filter(title => title.length > 0);
+
+            // Disable start button
+            document.getElementById('startBtn').disabled = true;
+            document.getElementById('startBtn').textContent = 'Scraping...';
+            
+            // Show progress section
+            document.getElementById('progressSection').style.display = 'block';
+            document.getElementById('resultsSection').style.display = 'none';
+            document.getElementById('previewSection').style.display = 'none';
+
+            // Start scraping
+            fetch('/start_scraping', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    job_titles: jobTitles,
+                    platforms: Array.from(selectedPlatforms)
+                })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (!data.success) {
+                    alert(data.message);
+                    resetStartButton();
+                    return;
+                }
+                
+                // Start checking status
+                startStatusChecking();
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                alert('Error starting scraping process');
+                resetStartButton();
+            });
+        }
+
+        function resetStartButton() {
+            document.getElementById('startBtn').disabled = false;
+            document.getElementById('startBtn').textContent = 'Start Scraping';
+        }
+
+        function startStatusChecking() {
+            if (statusCheckInterval) {
+                clearInterval(statusCheckInterval);
+            }
+            
+            statusCheckInterval = setInterval(() => {
+                fetch('/scraping_status')
+                    .then(response => response.json())
+                    .then(status => {
+                        updateProgress(status);
+                        
+                        if (!status.is_running) {
+                            clearInterval(statusCheckInterval);
+                            showResults(status.results);
+                            resetStartButton();
+                        }
+                    })
+                    .catch(error => {
+                        console.error('Error checking status:', error);
+                    });
+            }, 2000);
+        }
+
+        function updateProgress(status) {
+            const progressBar = document.getElementById('progressBar');
+            const progressText = document.getElementById('progressText');
+            const progressMessage = document.getElementById('progressMessage');
+            const statusIndicator = document.getElementById('statusIndicator');
+            const statusText = document.getElementById('statusText');
+            
+            progressBar.style.width = `${status.progress}%`;
+            progressText.textContent = `${status.progress}%`;
+            statusText.textContent = status.message;
+            
+            if (status.current_platform) {
+                statusText.textContent = `${status.current_platform}: ${status.message}`;
+            }
+            
+            // Update status indicator
+            statusIndicator.className = 'status-indicator ' + 
+                (status.is_running ? 'status-running' : 
+                 (status.results ? 'status-success' : 'status-error'));
+        }
+
+        function showResults(results) {
+            const resultsContent = document.getElementById('resultsContent');
+            let html = '';
+            
+            if (results.linkedin) {
+                const result = results.linkedin;
+                const statusClass = result.success ? 'alert-success' : 'alert-danger';
+                const statusIcon = result.success ? '✅' : '❌';
+                
+                html += `<div class="alert ${statusClass}">
+                    <strong>${statusIcon} LinkedIn:</strong> ${result.message}
+                    ${result.success ? 
+                        `<div class="mt-2">
+                            <button class="btn btn-sm btn-outline-primary" onclick="previewData('linkedin')">Preview Data</button>
+                            <button class="btn btn-sm btn-outline-success ms-1" onclick="downloadData('linkedin')">Download CSV</button>
+                        </div>` : ''}
+                </div>`;
+            }
+            
+            if (results.shine) {
+                const result = results.shine;
+                const statusClass = result.success ? 'alert-success' : 'alert-danger';
+                const statusIcon = result.success ? '✅' : '❌';
+                
+                html += `<div class="alert ${statusClass}">
+                    <strong>${statusIcon} Shine.com:</strong> ${result.message}
+                    ${result.success ? 
+                        `<div class="mt-2">
+                            <button class="btn btn-sm btn-outline-primary" onclick="previewData('shine')">Preview Data</button>
+                            <button class="btn btn-sm btn-outline-success ms-1" onclick="downloadData('shine')">Download CSV</button>
+                        </div>` : ''}
+                </div>`;
+            }
+            
+            resultsContent.innerHTML = html;
+            document.getElementById('resultsSection').style.display = 'block';
+        }
+
+        function previewData(platform) {
+            fetch(`/preview_data?platform=${platform}`)
+                .then(response => response.json())
+                .then(data => {
+                    const previewContent = document.getElementById('previewContent');
+                    if (data.success) {
+                        previewContent.innerHTML = `
+                            <div class="alert alert-info">
+                                <strong>Total Jobs Found:</strong> ${data.total_jobs}
+                            </div>
+                            <div class="preview-table">
+                                ${data.preview}
+                            </div>
+                        `;
+                    } else {
+                        previewContent.innerHTML = `<div class="alert alert-danger">${data.error}</div>`;
+                    }
+                    document.getElementById('previewSection').style.display = 'block';
+                })
+                .catch(error => {
+                    console.error('Error:', error);
+                    previewContent.innerHTML = `<div class="alert alert-danger">Error loading preview</div>`;
+                });
+        }
+
+        function downloadData(platform) {
+            window.open(`/download/${platform}`, '_blank');
+        }
+    </script>
+</body>
+</html>
