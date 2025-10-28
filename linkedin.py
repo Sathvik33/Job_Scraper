@@ -1,5 +1,6 @@
 import csv
 import time
+import os
 import random
 from selenium import webdriver
 from selenium.webdriver.common.by import By
@@ -39,7 +40,12 @@ options.add_argument(f"user-agent={random_user_agent()}")
 driver = webdriver.Chrome(options=options)
 wait = WebDriverWait(driver, 15)
 
-csv_file = open("linkedin_jobs_guest.csv", "w", newline="", encoding="utf-8")
+base_dir = os.path.dirname(os.path.abspath(__file__))
+data_dir = os.path.join(base_dir, 'Data')
+os.makedirs(data_dir, exist_ok=True)
+
+csv_path = os.path.join(data_dir, "linkedin_jobs_guest.csv")
+csv_file = open(csv_path, "w", newline="", encoding="utf-8")
 writer = csv.writer(csv_file)
 writer.writerow(["job_title", "company_name", "jobUrl", "salary", "location", "postedTime", "experienceLevel"])
 
